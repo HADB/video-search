@@ -1,0 +1,11 @@
+@import 'tailwindcss';
+@import '@nuxt/ui';
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  background-color: rgb(17, 24, 39);
+  color: rgb(229, 231, 235);
+}

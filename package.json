@@ -1,0 +1,26 @@
+{
+  "name": "video-search",
+  "type": "module",
+  "private": true,
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "^5.2.1",
+    "@nuxt/eslint": "1.9.0",
+    "@nuxt/ui": "3.3.2",
+    "eslint": "^9.34.0",
+    "eslint-plugin-format": "^1.0.1",
+    "mediabunny": "^1.11.2",
+    "nuxt": "^4.0.3",
+    "tailwindcss": "^4.1.12",
+    "typescript": "^5.9.2",
+    "vue": "^3.5.20",
+    "vue-router": "^4.5.1"
+  }
+}
