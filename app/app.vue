@@ -2,7 +2,9 @@
   <UApp>
     <div class="dark">
       <NuxtRouteAnnouncer />
-      <NuxtPage />
+      <NuxtLayout>
+        <NuxtPage />
+      </NuxtLayout>
     </div>
   </UApp>
 </template>
