@@ -6,6 +6,9 @@ export default defineNuxtConfig({
   ],
   devtools: { enabled: true },
   eslint: { config: { standalone: false } },
+  fonts: {
+    provider: 'local',
+  },
   modules: ['@nuxt/eslint', '@nuxt/ui'],
   ssr: false,
   colorMode: {
