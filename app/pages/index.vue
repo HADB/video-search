@@ -13,6 +13,16 @@ const entryItems = ref<EntryItem[]>([])
 const loading = ref(false)
 const detectingScenesLoading = ref(false)
 
+// 分镜识别进度相关状态
+const detectionProgress = ref({
+  currentVideoIndex: 0,
+  totalVideos: 0,
+  currentVideoName: '',
+  currentVideoDuration: 0,
+  currentVideoProgress: 0,
+  processedFrames: 0,
+})
+
 // 分镜分析结果存储
 const sceneAnalysisResults = ref<SceneAnalysisResultsMap>({})
 
@@ -25,6 +35,24 @@ const currentDirectoryKey = computed(() => {
 })
 const isHome = computed(() => currentPathDirectories.length === 0)
 const filteredEntryItems = computed(() => entryItems.value.filter((item) => item.kind === 'directory' || (item.kind === 'file' && item.name.endsWith('.mp4'))))
+
+// 计算分镜识别的总体进度百分比
+const detectionProgressPercentage = computed(() => {
+  if (!detectingScenesLoading.value || detectionProgress.value.totalVideos === 0) {
+    return 0
+  }
+
+  // 已完成视频的进度
+  const completedVideosProgress = detectionProgress.value.currentVideoIndex / detectionProgress.value.totalVideos
+
+  // 当前视频的进度（基于时长）
+  const currentVideoWeight = 1 / detectionProgress.value.totalVideos
+  const currentVideoProgressWeight = detectionProgress.value.currentVideoProgress * currentVideoWeight
+
+  const totalProgress = completedVideosProgress + currentVideoProgressWeight
+
+  return Math.min(Math.round(totalProgress * 100), 100)
+})
 
 // 获取当前目录下所有视频的分镜分析结果
 const currentDirectorySceneResults = computed(() => {
@@ -339,6 +367,16 @@ async function detectScenes() {
 
   detectingScenesLoading.value = true
 
+  // 重置进度
+  detectionProgress.value = {
+    currentVideoIndex: 0,
+    totalVideos: 0,
+    currentVideoName: '',
+    currentVideoDuration: 0,
+    currentVideoProgress: 0,
+    processedFrames: 0,
+  }
+
   try {
     const videoFileEntryItems = filteredEntryItems.value.filter((item) => item.kind === 'file' && item.name.endsWith('.mp4'))
 
@@ -351,6 +389,9 @@ async function detectScenes() {
       return
     }
 
+    // 初始化进度
+    detectionProgress.value.totalVideos = videoFileEntryItems.length
+
     // 动态导入分镜检测工具
     const { createVideoFrameSceneDetector, formatTimestamp, calculateSceneDurations } = await import('~/utils/video-analysis')
 
@@ -360,14 +401,32 @@ async function detectScenes() {
       color: 'info',
     })
 
-    for (const item of videoFileEntryItems) {
-      console.log(`开始分析视频: ${item.name}`)
+    for (let videoIndex = 0; videoIndex < videoFileEntryItems.length; videoIndex++) {
+      const item = videoFileEntryItems[videoIndex]
+
+      if (!item) {
+        continue
+      }
+
+      // 更新当前视频进度
+      detectionProgress.value.currentVideoIndex = videoIndex
+      detectionProgress.value.currentVideoName = item.name
+      detectionProgress.value.currentVideoDuration = 0
+      detectionProgress.value.currentVideoProgress = 0
+      detectionProgress.value.processedFrames = 0
+
+      console.log(`开始分析视频: ${item.name} (${videoIndex + 1}/${videoFileEntryItems.length})`)
 
       try {
         const fileHandle = item.handle as FileSystemFileHandle
         const file = await readFile(fileHandle)
         const blobSource = new BlobSource(file)
         const input = new Input({ source: blobSource, formats: ALL_FORMATS })
+        const duration = await input.computeDuration()
+
+        // 设置当前视频的总时长
+        detectionProgress.value.currentVideoDuration = duration
+
         const videoTrack = await input.getPrimaryVideoTrack()
 
         if (!videoTrack) {
@@ -414,14 +473,19 @@ async function detectScenes() {
 
           totalFrames++
 
+          // 更新帧处理进度
+          detectionProgress.value.processedFrames = totalFrames
+
+          // 基于当前时间戳和视频总时长计算当前视频进度
+          if (detectionProgress.value.currentVideoDuration > 0) {
+            detectionProgress.value.currentVideoProgress = Math.min(
+              sample.timestamp / detectionProgress.value.currentVideoDuration,
+              1.0,
+            )
+          }
+
           // 释放 VideoFrame 资源
           videoFrame.close()
-
-          // 可选：每隔一定数量的帧输出进度
-          if (totalFrames % 100 === 0) {
-            const stats = sceneDetector.getStats()
-            console.log(`处理进度: ${item.name} - 已处理 ${totalFrames} 帧，检测到 ${stats.scenesDetected} 个分镜`)
-          }
         }
 
         // 获取最终结果
@@ -483,6 +547,16 @@ async function detectScenes() {
   }
   finally {
     detectingScenesLoading.value = false
+
+    // 清理进度状态
+    detectionProgress.value = {
+      currentVideoIndex: 0,
+      totalVideos: 0,
+      currentVideoName: '',
+      currentVideoDuration: 0,
+      currentVideoProgress: 0,
+      processedFrames: 0,
+    }
   }
 }
 
@@ -760,6 +834,34 @@ async function goBack() {
                     {{ detectingScenesLoading ? '分析中...' : '识别分镜' }}
                   </UButton>
                 </div>
+              </div>
+            </div>
+
+            <!-- 分镜识别进度条 -->
+            <div v-if="detectingScenesLoading" class="mt-4">
+              <div class="flex justify-between items-center mb-2">
+                <div class="text-sm text-gray-400">
+                  正在分析: {{ detectionProgress.currentVideoName || '准备中...' }}
+                  <span v-if="detectionProgress.totalVideos > 0">
+                    ({{ detectionProgress.currentVideoIndex + 1 }}/{{ detectionProgress.totalVideos }})
+                  </span>
+                </div>
+                <div class="text-sm text-gray-400">
+                  {{ detectionProgressPercentage }}%
+                </div>
+              </div>
+              <UProgress
+                v-model="detectionProgressPercentage"
+                :max="100"
+                color="primary"
+                size="sm"
+                class="w-full"
+              />
+              <div class="text-xs text-gray-500 mt-1">
+                已处理帧数: {{ detectionProgress.processedFrames }}
+                <span v-if="detectionProgress.currentVideoDuration > 0">
+                  | 当前视频进度: {{ Math.round(detectionProgress.currentVideoProgress * 100) }}%
+                </span>
               </div>
             </div>
           </template>
