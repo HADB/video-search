@@ -188,3 +188,19 @@ export async function removeDirectoryHandle(id: string) {
 export async function isSameEntry(handle1?: FileSystemHandle, handle2?: FileSystemHandle) {
   return handle1 && handle2 && await handle1.isSameEntry(handle2)
 }
+
+/**
+ * 下载文件的公共函数
+ * @param handle 文件句柄
+ * @param filename 文件名
+ * @returns Promise<void>
+ */
+export async function downloadFile(handle: FileSystemFileHandle, filename: string): Promise<void> {
+  const file = await handle.getFile()
+  const url = URL.createObjectURL(file)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}

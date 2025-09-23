@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import type { SceneAnalysisResultsMap, VideoAnalysisResult } from '../../shared/types'
 import { useStorage } from '@vueuse/core'
-import { ALL_FORMATS, BlobSource, Input, Mp4OutputFormat, Output, StreamTarget, VideoSample, VideoSampleSink, VideoSampleSource } from 'mediabunny'
+import { ALL_FORMATS, BlobSource, Input, VideoSampleSink } from 'mediabunny'
 
 const storedDirectories = useStorage<StoredDirectoryInfo[]>('storedDirectories', () => [])
+// 持久化存储分镜分析结果（按目录路径组织）
+const storedSceneAnalysisResults = useStorage<Record<string, Record<string, any>>>('sceneAnalysisResults', () => ({}))
 const overlay = useOverlay()
 const toast = useToast()
 
@@ -16,6 +17,12 @@ const detectingScenesLoading = ref(false)
 const sceneAnalysisResults = ref<SceneAnalysisResultsMap>({})
 
 const currentPath = computed(() => currentPathDirectories.map((dir) => dir.name).join('/'))
+const currentDirectoryKey = computed(() => {
+  if (currentPathDirectories.length === 0) {
+    return ''
+  }
+  return currentPathDirectories.map((dir) => dir.name).join('/')
+})
 const isHome = computed(() => currentPathDirectories.length === 0)
 const filteredEntryItems = computed(() => entryItems.value.filter((item) => item.kind === 'directory' || (item.kind === 'file' && item.name.endsWith('.mp4'))))
 
@@ -36,6 +43,112 @@ const currentDirectorySceneResults = computed(() => {
 // 检查是否有分镜分析结果
 const hasSceneAnalysisResults = computed(() => Object.keys(currentDirectorySceneResults.value).length > 0)
 
+// 从存储加载分镜分析结果
+async function loadStoredSceneAnalysisResults() {
+  const directoryKey = currentDirectoryKey.value
+  if (!directoryKey) {
+    return
+  }
+
+  const storedResults = storedSceneAnalysisResults.value[directoryKey]
+  if (!storedResults) {
+    return
+  }
+
+  // 获取当前目录的句柄
+  const currentDirectoryHandle = currentPathDirectories[currentPathDirectories.length - 1]?.handle
+  if (!currentDirectoryHandle) {
+    return
+  }
+
+  // 动态导入分析工具
+  const { loadThumbnailFromLocalDirectory, formatTimestamp } = await import('~/utils/video-analysis')
+
+  console.log(`加载存储的分镜分析结果: ${directoryKey}`)
+
+  for (const [videoName, storedResult] of Object.entries(storedResults)) {
+    try {
+      // 重建运行时结果对象
+      const runtimeResult: VideoAnalysisResult = {
+        ...storedResult,
+        sceneChanges: await Promise.all(
+          storedResult.sceneChanges.map(async (scene: any) => {
+            let frameImageUrl: string | undefined
+
+            // 如果有缩略图文件名，尝试从本地加载
+            if (scene.thumbnailFileName) {
+              frameImageUrl = await loadThumbnailFromLocalDirectory(
+                currentDirectoryHandle,
+                scene.thumbnailFileName,
+              ) || undefined
+            }
+
+            return {
+              ...scene,
+              formattedTime: scene.formattedTime || formatTimestamp(scene.timestamp),
+              formattedDuration: scene.formattedDuration,
+              frameImageUrl,
+            }
+          }),
+        ),
+      }
+
+      sceneAnalysisResults.value[videoName] = runtimeResult
+      console.log(`已加载视频 ${videoName} 的分镜分析结果: ${runtimeResult.totalScenes} 个分镜`)
+    }
+    catch (error) {
+      console.warn(`加载视频 ${videoName} 的分镜分析结果失败:`, error)
+    }
+  }
+
+  if (Object.keys(storedResults).length > 0) {
+    toast.add({
+      title: '已加载分镜分析结果',
+      description: `从存储中加载了 ${Object.keys(storedResults).length} 个视频的分镜分析结果`,
+      color: 'success',
+    })
+  }
+}
+
+// 保存分镜分析结果到存储
+function saveSceneAnalysisResults() {
+  const directoryKey = currentDirectoryKey.value
+  if (!directoryKey) {
+    return
+  }
+
+  const resultsToStore: Record<string, any> = {}
+
+  for (const [videoName, result] of Object.entries(sceneAnalysisResults.value)) {
+    // 转换为存储格式（移除 blob URLs 和 fileHandle）
+    resultsToStore[videoName] = {
+      videoName: result.videoName,
+      timestamp: result.timestamp,
+      totalScenes: result.totalScenes,
+      options: result.options,
+      duration: result.duration,
+      sceneChanges: result.sceneChanges.map((scene) => ({
+        timestamp: scene.timestamp,
+        score: scene.score,
+        frameIndex: scene.frameIndex,
+        formattedTime: scene.formattedTime,
+        thumbnailFileName: scene.thumbnailFileName,
+        duration: scene.duration,
+        formattedDuration: scene.formattedDuration,
+        // 不保存 frameImageUrl (blob URL)
+      })),
+    }
+  }
+
+  if (Object.keys(resultsToStore).length > 0) {
+    if (!storedSceneAnalysisResults.value[directoryKey]) {
+      storedSceneAnalysisResults.value[directoryKey] = {}
+    }
+    storedSceneAnalysisResults.value[directoryKey] = resultsToStore
+    console.log(`已保存 ${directoryKey} 目录的分镜分析结果`)
+  }
+}
+
 async function removeDirectory(id: string) {
   await removeDirectoryHandle(id)
   storedDirectories.value = storedDirectories.value.filter((dir) => dir.id !== id)
@@ -49,6 +162,8 @@ async function enterDirectory(directoryData: StoredDirectoryInfo) {
     if (directoryHandle && await requestDirectoryPermission(directoryHandle)) {
       currentPathDirectories.push({ name: directoryData.name, handle: directoryHandle })
       entryItems.value = await listDirectoryEntryItems(directoryHandle)
+      // 进入目录后尝试加载存储的分镜分析结果
+      await loadStoredSceneAnalysisResults()
     }
     else {
       // 权限失效，从列表中移除
@@ -79,6 +194,8 @@ async function enterSubDirectory(item: EntryItem) {
   if (item.kind === 'directory') {
     currentPathDirectories.push({ name: item.name, handle: item.handle as FileSystemDirectoryHandle })
     entryItems.value = await listDirectoryEntryItems(item.handle as FileSystemDirectoryHandle)
+    // 进入子目录后尝试加载存储的分镜分析结果
+    await loadStoredSceneAnalysisResults()
   }
 }
 
@@ -100,6 +217,67 @@ function cleanupSceneAnalysisResults() {
     })
   })
   sceneAnalysisResults.value = {}
+}
+
+// 清理当前目录的存储数据和缩略图文件
+async function clearCurrentDirectoryStoredData() {
+  const directoryKey = currentDirectoryKey.value
+  if (!directoryKey) {
+    return
+  }
+
+  try {
+    // 清理内存中的 blob URLs
+    cleanupSceneAnalysisResults()
+
+    // 清理存储的数据
+    if (storedSceneAnalysisResults.value[directoryKey]) {
+      delete storedSceneAnalysisResults.value[directoryKey]
+    }
+
+    // 尝试删除本地缩略图文件（如果有的话）
+    const currentDirectoryHandle = currentPathDirectories[currentPathDirectories.length - 1]?.handle
+    if (currentDirectoryHandle) {
+      try {
+        const thumbnailsDir = await currentDirectoryHandle.getDirectoryHandle('thumbnails')
+
+        // 遍历并删除所有缩略图文件
+        for await (const [filename, fileHandle] of thumbnailsDir.entries()) {
+          if (fileHandle.kind === 'file' && filename.endsWith('.jpg')) {
+            await thumbnailsDir.removeEntry(filename)
+            console.log(`已删除缩略图文件: ${filename}`)
+          }
+        }
+
+        // 尝试删除 thumbnails 目录（如果为空）
+        try {
+          await currentDirectoryHandle.removeEntry('thumbnails')
+          console.log('已删除空的 thumbnails 目录')
+        }
+        catch {
+          // 目录不为空或其他错误，忽略
+          console.log('thumbnails 目录不为空或删除失败，保留目录')
+        }
+      }
+      catch (error) {
+        console.log('没有找到 thumbnails 目录或删除失败:', error)
+      }
+    }
+
+    toast.add({
+      title: '数据清理完成',
+      description: '已清理当前目录的分镜分析结果和缩略图文件',
+      color: 'success',
+    })
+  }
+  catch (error) {
+    console.error('清理存储数据失败:', error)
+    toast.add({
+      title: '清理失败',
+      description: error instanceof Error ? error.message : '未知错误',
+      color: 'error',
+    })
+  }
 }
 
 // 选择并添加新目录
@@ -174,7 +352,7 @@ async function detectScenes() {
     }
 
     // 动态导入分镜检测工具
-    const { createVideoFrameSceneDetector, formatTimestamp } = await import('~/utils/video-analysis')
+    const { createVideoFrameSceneDetector, formatTimestamp, calculateSceneDurations } = await import('~/utils/video-analysis')
 
     toast.add({
       title: '开始分析',
@@ -204,18 +382,28 @@ async function detectScenes() {
 
         const videoSampleSink = new VideoSampleSink(videoTrack)
 
-        // 创建分镜检测器
-        const sceneDetector = createVideoFrameSceneDetector({
-          threshold: 0.3,
-          sampleInterval: 1.0,
-          scaledSize: 128,
-        })
+        // 获取当前目录句柄用于保存缩略图
+        const currentDirectoryHandle = currentPathDirectories[currentPathDirectories.length - 1]?.handle
+
+        // 创建分镜检测器（传入目录句柄和视频名称以保存缩略图）
+        const sceneDetector = createVideoFrameSceneDetector(
+          {
+            threshold: 0.3,
+            scaledSize: 128,
+          },
+          currentDirectoryHandle,
+          item.name,
+        )
 
         let totalFrames = 0
+        let videoDuration = 0
 
         // 处理每个视频样本
         for await (const sample of videoSampleSink.samples()) {
           const videoFrame = sample.toVideoFrame()
+
+          // 记录最后的时间戳作为视频时长
+          videoDuration = Math.max(videoDuration, sample.timestamp)
 
           // 检测分镜切换（现在是异步的）
           const result = await sceneDetector.processFrame(videoFrame, sample.timestamp)
@@ -238,23 +426,28 @@ async function detectScenes() {
 
         // 获取最终结果
         const sceneChanges = sceneDetector.getSceneChanges()
+
+        // 计算分镜长度
+        const scenesWithDuration = calculateSceneDurations(sceneChanges, videoDuration)
+
         console.log(`分析完成: ${item.name}`)
         console.log(`总帧数: ${totalFrames}`)
-        console.log(`检测到的分镜数: ${sceneChanges.length}`)
-        console.log('分镜时间点:', sceneChanges.map((scene) => formatTimestamp(scene.timestamp)))
+        console.log(`视频时长: ${formatTimestamp(videoDuration)}`)
+        console.log(`检测到的分镜数: ${scenesWithDuration.length}`)
+        console.log('分镜时间点:', scenesWithDuration.map((scene) => `${formatTimestamp(scene.timestamp)} (${scene.formattedDuration || '未知'})`))
 
         // 保存分析结果
         const analysisResult: VideoAnalysisResult = {
           videoName: item.name,
           timestamp: new Date().toISOString(),
-          totalScenes: sceneChanges.length, // 现在包含第一个分镜，不需要+1
-          sceneChanges: sceneChanges.map((scene) => ({
+          totalScenes: scenesWithDuration.length,
+          duration: videoDuration,
+          sceneChanges: scenesWithDuration.map((scene) => ({
             ...scene,
             formattedTime: formatTimestamp(scene.timestamp),
           })),
           options: {
             threshold: 0.3,
-            sampleInterval: 1.0,
             scaledSize: 128,
           },
           fileHandle: item.handle as FileSystemFileHandle,
@@ -265,7 +458,7 @@ async function detectScenes() {
         // 显示结果通知
         toast.add({
           title: '分镜分析完成',
-          description: `${item.name}: 检测到 ${sceneChanges.length} 个分镜切换点`,
+          description: `${item.name}: 检测到 ${scenesWithDuration.length} 个分镜切换点，视频时长 ${formatTimestamp(videoDuration)}`,
           color: 'success',
         })
       }
@@ -278,6 +471,9 @@ async function detectScenes() {
         })
       }
     }
+
+    // 保存所有分析结果到存储
+    saveSceneAnalysisResults()
 
     toast.add({
       title: '全部分析完成',
@@ -362,20 +558,14 @@ function isTextFile(filename: string): boolean {
 }
 
 // 下载文件
-async function downloadFile(item: EntryItem) {
+async function downloadFileWrapper(item: EntryItem) {
   if (item.kind === 'directory') {
     return
   }
 
   try {
     const fileHandle = item.handle as FileSystemFileHandle
-    const file = await fileHandle.getFile()
-    const url = URL.createObjectURL(file)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = item.name
-    a.click()
-    URL.revokeObjectURL(url)
+    await downloadFile(fileHandle, item.name)
     toast.add({
       title: '文件下载已开始',
       color: 'success',
@@ -385,6 +575,33 @@ async function downloadFile(item: EntryItem) {
     toast.add({
       title: '下载文件失败',
       description: error.message,
+      color: 'error',
+    })
+  }
+}
+
+// 预览分镜
+async function previewScene(scene: SceneChangePoint, videoName: string, _videoResult: VideoAnalysisResult) {
+  try {
+    // 动态导入分镜预览组件
+    const { default: ScenePreviewModal } = await import('~/components/scene-preview-modal.vue')
+    const modal = overlay.create(ScenePreviewModal)
+
+    // 获取当前目录句柄
+    const currentDirectoryHandle = currentPathDirectories[currentPathDirectories.length - 1]?.handle
+
+    // 打开模态框并传入数据
+    modal.open({
+      scene,
+      videoName,
+      currentDirectoryHandle,
+    })
+  }
+  catch (error) {
+    console.error('打开分镜预览失败:', error)
+    toast.add({
+      title: '预览失败',
+      description: '无法打开分镜预览',
       color: 'error',
     })
   }
@@ -608,7 +825,7 @@ async function goBack() {
                   variant="ghost"
                   color="success"
                   icon="heroicons:arrow-down-tray"
-                  @click.stop="downloadFile(item)"
+                  @click.stop="downloadFileWrapper(item)"
                 >
                   下载
                 </UButton>
@@ -624,15 +841,26 @@ async function goBack() {
               <h3 class="text-lg font-semibold text-gray-200">
                 分镜分析结果
               </h3>
-              <UButton
-                size="xs"
-                variant="ghost"
-                color="error"
-                icon="heroicons:trash"
-                @click="cleanupSceneAnalysisResults"
-              >
-                清除结果
-              </UButton>
+              <div class="flex gap-2">
+                <UButton
+                  size="xs"
+                  variant="ghost"
+                  color="error"
+                  icon="heroicons:trash"
+                  @click="cleanupSceneAnalysisResults"
+                >
+                  清除内存
+                </UButton>
+                <UButton
+                  size="xs"
+                  variant="ghost"
+                  color="error"
+                  icon="heroicons:x-circle"
+                  @click="clearCurrentDirectoryStoredData"
+                >
+                  清除存储
+                </UButton>
+              </div>
             </div>
           </template>
 
@@ -661,7 +889,8 @@ async function goBack() {
                 <div
                   v-for="(scene, index) in result.sceneChanges"
                   :key="index"
-                  class="group relative border border-gray-600 rounded-lg overflow-hidden hover:border-primary-500 transition-colors"
+                  class="group relative border border-gray-600 rounded-lg overflow-hidden hover:border-primary-500 transition-colors cursor-pointer"
+                  @click="previewScene(scene, videoName as string, result)"
                 >
                   <div class="aspect-video bg-gray-800 flex items-center justify-center">
                     <img
@@ -676,23 +905,45 @@ async function goBack() {
                     </div>
                   </div>
 
-                  <div class="flex items-end gap-2 absolute bottom-0 left-0 h-1/3 w-full bg-gradient-to-b from-transparent to-black/80 text-white text-xs p-2">
-                    <div class="font-medium">
-                      {{ scene.formattedTime }}
-                    </div>
-                    <div class="font-medium text-gray-300">
-                      分镜 {{ index + 1 }}
+                  <!-- 分镜信息 -->
+                  <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent text-white text-xs p-2">
+                    <div class="flex justify-between items-end">
+                      <div>
+                        <div class="font-medium">
+                          {{ scene.formattedTime }}
+                        </div>
+                        <div class="text-gray-300">
+                          分镜 {{ index + 1 }}
+                        </div>
+                      </div>
+                      <div v-if="scene.formattedDuration" class="text-right">
+                        <div class="font-medium text-primary-300">
+                          {{ scene.formattedDuration }}
+                        </div>
+                        <div class="text-gray-400 text-[10px]">
+                          时长
+                        </div>
+                      </div>
+                      <div v-else class="text-right">
+                        <div class="font-medium text-gray-400 text-[10px]">
+                          未知时长
+                        </div>
+                      </div>
                     </div>
                   </div>
 
                   <!-- 悬停时显示更多信息 -->
                   <div class="absolute inset-0 bg-black/80 transition-opacity flex items-center justify-center opacity-0 group-hover:opacity-100">
                     <div class="text-white text-center">
-                      <div class="text-sm font-medium">
-                        差异度: {{ Math.round(scene.score * 100) }}%
+                      <div class="text-sm font-medium mb-1">
+                        点击预览分镜
                       </div>
-                      <div class="text-xs">
-                        帧索引: {{ scene.frameIndex }}
+                      <div class="text-xs space-y-1">
+                        <div>差异度: {{ Math.round(scene.score * 100) }}%</div>
+                        <div>帧索引: {{ scene.frameIndex }}</div>
+                        <div v-if="scene.formattedDuration">
+                          时长: {{ scene.formattedDuration }}
+                        </div>
                       </div>
                     </div>
                   </div>

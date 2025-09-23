@@ -1,48 +1,31 @@
 <script setup lang="ts">
-interface FileItem {
-  name: string
-  kind: 'file' | 'directory'
-  handle: FileSystemFileHandle | FileSystemDirectoryHandle
-  size?: number
-  lastModified?: Date
-  type?: string
-}
-
 interface Props {
-  file: FileItem
+  file: EntryItem
   content: string
   type: string
 }
 
 const props = defineProps<Props>()
-
 // 按照 NuxtUI 文档要求，使用 emit 方式
 const emit = defineEmits<{ close: [boolean] }>()
 
-// 下载文件
-async function downloadFile(item: FileItem) {
+const toast = useToast()
+
+// 下载文件包装函数
+async function downloadFileWrapper(item: EntryItem) {
   if (item.kind === 'directory') {
     return
   }
 
   try {
     const fileHandle = item.handle as FileSystemFileHandle
-    const file = await fileHandle.getFile()
-    const url = URL.createObjectURL(file)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = item.name
-    a.click()
-    URL.revokeObjectURL(url)
-
-    const toast = useToast()
+    await downloadFile(fileHandle, item.name)
     toast.add({
       title: '文件下载已开始',
       color: 'success',
     })
   }
   catch (error: any) {
-    const toast = useToast()
     toast.add({
       title: '下载文件失败',
       description: error.message,
@@ -122,7 +105,7 @@ onUnmounted(() => {
             </p>
             <UButton
               icon="heroicons:arrow-down-tray"
-              @click="downloadFile(file)"
+              @click="downloadFileWrapper(file)"
             >
               下载文件
             </UButton>
@@ -138,7 +121,7 @@ onUnmounted(() => {
         </UButton>
         <UButton
           icon="heroicons:arrow-down-tray"
-          @click="downloadFile(file)"
+          @click="downloadFileWrapper(file)"
         >
           下载
         </UButton>

@@ -1,15 +1,6 @@
 <script setup lang="ts">
-interface FileItem {
-  name: string
-  kind: 'file' | 'directory'
-  handle: FileSystemFileHandle | FileSystemDirectoryHandle
-  size?: number
-  lastModified?: Date
-  type?: string
-}
-
 interface Props {
-  item: FileItem
+  item: EntryItem
 }
 
 const props = defineProps<Props>()
