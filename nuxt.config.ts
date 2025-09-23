@@ -24,4 +24,13 @@ export default defineNuxtConfig({
   },
   modules: ['@nuxt/eslint', '@nuxt/ui'],
   ssr: false,
+  typescript: {
+    typeCheck: true,
+    tsConfig: {
+      compilerOptions: {
+        strict: true,
+        types: ['@types/wicg-file-system-access'],
+      },
+    },
+  },
 })
