@@ -121,7 +121,7 @@ onUnmounted(() => {
               此文件类型暂不支持预览
             </p>
             <UButton
-              icon="i-heroicons-arrow-down-tray"
+              icon="heroicons:arrow-down-tray"
               @click="downloadFile(file)"
             >
               下载文件
@@ -137,7 +137,7 @@ onUnmounted(() => {
           关闭
         </UButton>
         <UButton
-          icon="i-heroicons-arrow-down-tray"
+          icon="heroicons:arrow-down-tray"
           @click="downloadFile(file)"
         >
           下载

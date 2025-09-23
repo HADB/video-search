@@ -117,36 +117,6 @@ async function addNewDirectory() {
   }
 }
 
-// 获取文件图标
-function getEntryIcon(item: EntryItem): string {
-  if (item.kind === 'directory') {
-    return '📁'
-  }
-
-  const ext = item.name.split('.').pop()?.toLowerCase()
-  const iconMap: Record<string, string> = {
-    txt: '📄',
-    md: '📝',
-    js: '📜',
-    ts: '📜',
-    json: '📋',
-    html: '🌐',
-    css: '🎨',
-    png: '🖼️',
-    jpg: '🖼️',
-    jpeg: '🖼️',
-    gif: '🖼️',
-    svg: '🖼️',
-    pdf: '📕',
-    mp4: '🎬',
-    mov: '🎬',
-    mp3: '🎵',
-    zip: '📦',
-    rar: '📦',
-  }
-  return iconMap[ext || ''] || '📄'
-}
-
 // 预览文件
 async function previewFileContent(item: EntryItem) {
   if (item.kind === 'directory') {
@@ -261,222 +231,200 @@ async function goBack() {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 p-8">
-    <div class="max-w-6xl mx-auto">
-      <!-- 浏览器支持提示 -->
-      <UAlert
-        v-if="!isFileSystemAccessSupported()"
-        icon="i-heroicons-exclamation-triangle"
-        color="error"
-        variant="soft"
-        title="浏览器不支持"
-        description="当前浏览器不支持 File System Access API，请使用 Chrome 86+ 或 Edge 86+ 浏览器"
-        class="mb-6"
-      />
-      <template v-else>
-        <!-- 首页：目录列表 -->
-        <div v-if="isHome">
-          <!-- 顶部操作栏 -->
-          <UCard class="mb-6">
+  <div>
+    <!-- 浏览器支持提示 -->
+    <UAlert
+      v-if="!isFileSystemAccessSupported()"
+      icon="heroicons:exclamation-triangle"
+      color="error"
+      variant="soft"
+      title="浏览器不支持"
+      description="当前浏览器不支持 File System Access API，请使用 Chrome 86+ 或 Edge 86+ 浏览器"
+      class="mb-6"
+    />
+    <template v-else>
+      <div v-if="isHome">
+        <UCard v-if="storedDirectories.length > 0">
+          <template #header>
             <div class="flex justify-between items-center">
-              <div class="flex gap-3">
-                <UButton
-                  :loading="loading"
-                  color="primary"
-                  icon="i-heroicons-plus"
-                  @click="addNewDirectory"
-                >
-                  添加目录
-                </UButton>
-              </div>
-            </div>
-          </UCard>
-
-          <!-- 目录列表 -->
-          <UCard v-if="storedDirectories.length > 0">
-            <template #header>
+              <h2 class="text-lg font-semibold">
+                已授权的目录
+              </h2>
               <div class="flex justify-between items-center">
-                <h2 class="text-lg font-semibold">
-                  已授权的目录
-                </h2>
-                <UBadge color="neutral" variant="subtle">
-                  {{ storedDirectories.length }} 个目录
-                </UBadge>
-              </div>
-            </template>
-
-            <div class="space-y-3">
-              <div
-                v-for="directory in storedDirectories"
-                :key="directory.id"
-                class="flex items-center justify-between p-4 rounded-lg hover:bg-gray-800 transition-colors border border-gray-700 cursor-pointer"
-                @click="enterDirectory(directory)"
-              >
-                <div class="flex items-center space-x-4">
-                  <span class="text-2xl">📁</span>
-                  <div>
-                    <h3 class="font-semibold text-gray-200">
-                      {{ directory.name }}
-                    </h3>
-                  </div>
-                </div>
-                <div class="flex items-center space-x-2">
+                <div class="flex gap-3">
                   <UButton
-                    size="xs"
-                    variant="ghost"
-                    color="error"
-                    icon="i-heroicons-trash"
-                    @click.stop="removeDirectory(directory.id)"
+                    :loading="loading"
+                    color="primary"
+                    icon="heroicons:plus"
+                    @click="addNewDirectory"
                   >
-                    移除
+                    添加目录
                   </UButton>
                 </div>
               </div>
             </div>
-          </UCard>
+          </template>
 
-          <!-- 空状态 -->
-          <UCard v-else>
-            <div class="py-12 text-center">
-              <div class="text-6xl text-gray-600 mb-4">
-                📂
+          <div class="space-y-3">
+            <div
+              v-for="directory in storedDirectories"
+              :key="directory.id"
+              class="flex items-center justify-between p-4 min-h-20 rounded-lg hover:bg-gray-800 transition-colors border border-gray-700 cursor-pointer"
+              @click="enterDirectory(directory)"
+            >
+              <div class="flex items-center text-xl gap-3">
+                <UIcon name="heroicons:folder" size="24" />
+                <div class="flex items-center space-x-2">
+                  <UBadge color="primary" variant="subtle" size="xs">
+                    目录
+                  </UBadge>
+                  <p class="font-mono text-sm truncate text-gray-200">
+                    {{ directory.name }}
+                  </p>
+                </div>
               </div>
-              <h3 class="text-lg font-semibold text-gray-300 mb-2">
-                还没有授权的目录
-              </h3>
-              <p class="text-gray-400 mb-6">
-                点击"添加目录"按钮来选择并授权一个本地目录
-              </p>
-              <UButton
-                color="primary"
-                icon="i-heroicons-plus"
-                @click="addNewDirectory"
-              >
-                添加第一个目录
-              </UButton>
+              <div class="flex items-center space-x-2">
+                <UButton
+                  size="xs"
+                  variant="ghost"
+                  color="error"
+                  icon="heroicons:trash"
+                  @click.stop="removeDirectory(directory.id)"
+                >
+                  移除
+                </UButton>
+              </div>
             </div>
-          </UCard>
-        </div>
+          </div>
+        </UCard>
 
-        <!-- 目录浏览视图 -->
-        <div v-if="!isHome">
-          <!-- 顶部操作栏 -->
-          <UCard class="mb-6">
+        <!-- 空状态 -->
+        <UCard v-else>
+          <div class="py-12 text-center">
+            <UIcon name="heroicons:folder" />
+            <h3 class="text-lg font-semibold text-gray-300 mb-2">
+              还没有授权的目录
+            </h3>
+            <p class="text-gray-400 mb-6">
+              点击"添加目录"按钮来选择并授权一个本地目录
+            </p>
+            <UButton
+              color="primary"
+              icon="heroicons:plus"
+              @click="addNewDirectory"
+            >
+              添加第一个目录
+            </UButton>
+          </div>
+        </UCard>
+      </div>
+
+      <!-- 目录浏览视图 -->
+      <div v-if="!isHome">
+        <!-- 文件列表 -->
+        <UCard
+          class="mb-6"
+        >
+          <template #header>
             <div class="flex justify-between items-center">
-              <div class="flex items-center space-x-3">
-                <UIcon name="i-heroicons-folder" class="text-primary-500 text-xl" />
+              <div class="flex items-center gap-3">
                 <span class="font-mono bg-gray-800 px-3 py-1 rounded border border-gray-700 text-sm text-gray-200">
                   {{ currentPath || '未选择目录' }}
                 </span>
               </div>
-              <div class="flex gap-3">
-                <UButton
-                  :disabled="loading"
-                  variant="outline"
-                  icon="i-heroicons-home"
-                  @click="goHome"
-                >
-                  返回首页
-                </UButton>
-                <UButton
-                  v-if="currentPathDirectories.length > 0"
-                  :disabled="loading"
-                  variant="outline"
-                  icon="i-heroicons-arrow-left"
-                  @click="goBack"
-                >
-                  返回上级
-                </UButton>
-              </div>
-            </div>
-          </UCard>
-
-          <!-- 文件列表 -->
-          <UCard
-            class="mb-6"
-          >
-            <template #header>
               <div class="flex justify-between items-center">
-                <h2 class="text-lg font-semibold">
-                  文件列表
-                </h2>
-                <div class="flex items-center gap-3">
-                  <UBadge color="neutral" variant="subtle">
-                    {{ filteredEntryItems.length }} 个项目
-                  </UBadge>
+                <div class="flex gap-3">
+                  <UButton
+                    :disabled="loading"
+                    variant="outline"
+                    icon="heroicons:home"
+                    @click="goHome"
+                  >
+                    返回首页
+                  </UButton>
+                  <UButton
+                    v-if="currentPathDirectories.length > 0"
+                    :disabled="loading"
+                    variant="outline"
+                    icon="heroicons:arrow-left"
+                    @click="goBack"
+                  >
+                    返回上级
+                  </UButton>
                 </div>
               </div>
-            </template>
-
-            <div v-if="loading" class="flex justify-center items-center py-12">
-              <UIcon name="i-heroicons-arrow-path" class="animate-spin text-2xl text-primary-500 mr-2" />
-              <span class="text-gray-400">加载中...</span>
             </div>
+          </template>
 
-            <div v-else-if="filteredEntryItems.length === 0" class="py-12">
-              <div class="text-center">
-                <div class="text-6xl text-gray-600 mb-4">
-                  📁
-                </div>
-                <p class="text-gray-400 text-lg">
-                  该目录下没有视频文件
-                </p>
-              </div>
+          <div v-if="loading" class="flex justify-center items-center py-12">
+            <UIcon name="heroicons:arrow-path" class="animate-spin text-2xl text-primary-500 mr-2" />
+            <span class="text-gray-400">加载中...</span>
+          </div>
+
+          <div v-else-if="filteredEntryItems.length === 0" class="py-12">
+            <div class="text-center">
+              <UIcon name="heroicons:folder" />
+              <p class="text-gray-400 text-lg">
+                该目录下没有视频文件
+              </p>
             </div>
+          </div>
 
-            <div v-else class="space-y-1">
-              <div
-                v-for="item in filteredEntryItems"
-                :key="item.name"
-                class="flex items-center justify-between p-3 rounded-lg hover:bg-gray-800 transition-colors border border-gray-700"
-                :class="{ 'cursor-pointer': item.kind === 'directory' }"
-                @click="item.kind === 'directory' ? enterSubDirectory(item) : null"
-              >
-                <div class="flex items-center space-x-3 min-w-0 flex-1">
-                  <span class="text-xl flex-shrink-0">{{ getEntryIcon(item) }}</span>
-                  <div class="min-w-0 flex-1">
+          <div v-else class="space-y-2">
+            <div
+              v-for="item in filteredEntryItems"
+              :key="item.name"
+              class="flex items-center justify-between p-4 min-h-20 rounded-lg hover:bg-gray-800 transition-colors border border-gray-700"
+              :class="{ 'cursor-pointer': item.kind === 'directory' }"
+              @click="item.kind === 'directory' ? enterSubDirectory(item) : null"
+            >
+              <div class="flex items-center min-w-0 flex-1 gap-3">
+                <UIcon v-if="item.kind === 'directory'" name="heroicons:folder" size="24" />
+                <UIcon v-if="item.kind === 'file'" name="heroicons:film" size="24" />
+                <div class="flex flex-col min-w-0 flex-1">
+                  <div class="flex items-center gap-2">
+                    <UBadge :color="item.kind === 'directory' ? 'primary' : 'neutral'" variant="subtle" size="xs">
+                      {{ item.kind === 'directory' ? '目录' : '文件' }}
+                    </UBadge>
                     <p class="font-mono text-sm truncate text-gray-200">
                       {{ item.name }}
                     </p>
-                    <div class="flex items-center space-x-4 text-xs text-gray-400 mt-1">
-                      <UBadge :color="item.kind === 'directory' ? 'primary' : 'neutral'" variant="subtle" size="xs">
-                        {{ item.kind === 'directory' ? '目录' : '文件' }}
-                      </UBadge>
-                      <span v-if="item.kind === 'file' && item.size !== undefined">
-                        {{ formatFileSize(item.size) }}
-                      </span>
-                      <span v-if="item.lastModified">
-                        {{ item.lastModified.toLocaleDateString() }}
-                      </span>
-                    </div>
+                  </div>
+                  <div v-if="item.kind === 'file'" class="flex items-center space-x-4 text-xs text-gray-400 mt-1">
+                    <span v-if="item.size !== undefined">
+                      {{ formatFileSize(item.size) }}
+                    </span>
+                    <span v-if="item.lastModified">
+                      {{ item.lastModified.toLocaleDateString() }}
+                    </span>
                   </div>
                 </div>
-                <div class="flex items-center space-x-2 flex-shrink-0">
-                  <UButton
-                    v-if="item.kind === 'file'"
-                    size="xs"
-                    variant="ghost"
-                    icon="i-heroicons-eye"
-                    @click.stop="previewFileContent(item)"
-                  >
-                    预览
-                  </UButton>
-                  <UButton
-                    v-if="item.kind === 'file'"
-                    size="xs"
-                    variant="ghost"
-                    color="success"
-                    icon="i-heroicons-arrow-down-tray"
-                    @click.stop="downloadFile(item)"
-                  >
-                    下载
-                  </UButton>
-                </div>
+              </div>
+              <div class="flex items-center space-x-2 flex-shrink-0">
+                <UButton
+                  v-if="item.kind === 'file'"
+                  size="xs"
+                  variant="ghost"
+                  icon="heroicons:eye"
+                  @click.stop="previewFileContent(item)"
+                >
+                  预览
+                </UButton>
+                <UButton
+                  v-if="item.kind === 'file'"
+                  size="xs"
+                  variant="ghost"
+                  color="success"
+                  icon="heroicons:arrow-down-tray"
+                  @click.stop="downloadFile(item)"
+                >
+                  下载
+                </UButton>
               </div>
             </div>
-          </UCard>
-        </div>
-      </template>
-    </div>
+          </div>
+        </UCard>
+      </div>
+    </template>
   </div>
 </template>

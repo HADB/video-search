@@ -38,7 +38,7 @@ function cancel() {
         <div class="flex items-start space-x-3">
           <div class="flex-shrink-0">
             <UIcon
-              name="i-heroicons-exclamation-triangle"
+              name="heroicons:exclamation-triangle"
               class="text-2xl text-warning-500"
             />
           </div>
