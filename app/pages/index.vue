@@ -128,14 +128,6 @@ async function loadStoredSceneAnalysisResults() {
       console.warn(`加载视频 ${videoName} 的分镜分析结果失败:`, error)
     }
   }
-
-  if (Object.keys(storedResults).length > 0) {
-    toast.add({
-      title: '已加载分镜分析结果',
-      description: `从存储中加载了 ${Object.keys(storedResults).length} 个视频的分镜分析结果`,
-      color: 'success',
-    })
-  }
 }
 
 // 保存分镜分析结果到存储
@@ -245,67 +237,6 @@ function cleanupSceneAnalysisResults() {
     })
   })
   sceneAnalysisResults.value = {}
-}
-
-// 清理当前目录的存储数据和缩略图文件
-async function clearCurrentDirectoryStoredData() {
-  const directoryKey = currentDirectoryKey.value
-  if (!directoryKey) {
-    return
-  }
-
-  try {
-    // 清理内存中的 blob URLs
-    cleanupSceneAnalysisResults()
-
-    // 清理存储的数据
-    if (storedSceneAnalysisResults.value[directoryKey]) {
-      delete storedSceneAnalysisResults.value[directoryKey]
-    }
-
-    // 尝试删除本地缩略图文件（如果有的话）
-    const currentDirectoryHandle = currentPathDirectories[currentPathDirectories.length - 1]?.handle
-    if (currentDirectoryHandle) {
-      try {
-        const thumbnailsDir = await currentDirectoryHandle.getDirectoryHandle('thumbnails')
-
-        // 遍历并删除所有缩略图文件
-        for await (const [filename, fileHandle] of thumbnailsDir.entries()) {
-          if (fileHandle.kind === 'file' && filename.endsWith('.jpg')) {
-            await thumbnailsDir.removeEntry(filename)
-            console.log(`已删除缩略图文件: ${filename}`)
-          }
-        }
-
-        // 尝试删除 thumbnails 目录（如果为空）
-        try {
-          await currentDirectoryHandle.removeEntry('thumbnails')
-          console.log('已删除空的 thumbnails 目录')
-        }
-        catch {
-          // 目录不为空或其他错误，忽略
-          console.log('thumbnails 目录不为空或删除失败，保留目录')
-        }
-      }
-      catch (error) {
-        console.log('没有找到 thumbnails 目录或删除失败:', error)
-      }
-    }
-
-    toast.add({
-      title: '数据清理完成',
-      description: '已清理当前目录的分镜分析结果和缩略图文件',
-      color: 'success',
-    })
-  }
-  catch (error) {
-    console.error('清理存储数据失败:', error)
-    toast.add({
-      title: '清理失败',
-      description: error instanceof Error ? error.message : '未知错误',
-      color: 'error',
-    })
-  }
 }
 
 // 选择并添加新目录
@@ -943,26 +874,6 @@ async function goBack() {
               <h3 class="text-lg font-semibold text-gray-200">
                 分镜分析结果
               </h3>
-              <div class="flex gap-2">
-                <UButton
-                  size="xs"
-                  variant="ghost"
-                  color="error"
-                  icon="heroicons:trash"
-                  @click="cleanupSceneAnalysisResults"
-                >
-                  清除内存
-                </UButton>
-                <UButton
-                  size="xs"
-                  variant="ghost"
-                  color="error"
-                  icon="heroicons:x-circle"
-                  @click="clearCurrentDirectoryStoredData"
-                >
-                  清除存储
-                </UButton>
-              </div>
             </div>
           </template>
 
@@ -1043,9 +954,6 @@ async function goBack() {
                       <div class="text-xs space-y-1">
                         <div>差异度: {{ Math.round(scene.score * 100) }}%</div>
                         <div>帧索引: {{ scene.frameIndex }}</div>
-                        <div v-if="scene.formattedDuration">
-                          时长: {{ scene.formattedDuration }}
-                        </div>
                       </div>
                     </div>
                   </div>
