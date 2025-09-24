@@ -21,10 +21,31 @@ const detectionProgress = ref({
   currentVideoDuration: 0,
   currentVideoProgress: 0,
   processedFrames: 0,
+  // 初始化相关字段
+  isInitializing: false,
+  initializationMessage: '',
+  initializationStartTime: 0,
+  // 新增性能统计字段
+  startTime: 0,
+  currentTime: 0,
+  elapsedTime: 0,
+  averageFPS: 0,
+  totalProcessedFrames: 0,
 })
 
 // 分镜分析结果存储
 const sceneAnalysisResults = ref<SceneAnalysisResultsMap>({})
+
+// 分镜搜索相关状态
+const searchQuery = ref('')
+const searchResults = ref<Array<{
+  videoName: string
+  scene: SceneChangePoint
+  similarity: number
+  sceneIndex: number
+}>>([])
+const isSearching = ref(false)
+const hasSearched = ref(false)
 
 const currentPath = computed(() => currentPathDirectories.map((dir) => dir.name).join('/'))
 const currentDirectoryKey = computed(() => {
@@ -35,6 +56,9 @@ const currentDirectoryKey = computed(() => {
 })
 const isHome = computed(() => currentPathDirectories.length === 0)
 const filteredEntryItems = computed(() => entryItems.value.filter((item) => item.kind === 'directory' || (item.kind === 'file' && item.name.endsWith('.mp4'))))
+
+// 是否显示搜索结果
+const hasSearchResults = computed(() => searchResults.value.length > 0)
 
 // 计算分镜识别的总体进度百分比
 const detectionProgressPercentage = computed(() => {
@@ -52,6 +76,24 @@ const detectionProgressPercentage = computed(() => {
   const totalProgress = completedVideosProgress + currentVideoProgressWeight
 
   return Math.min(Math.round(totalProgress * 100), 100)
+})
+
+// 格式化耗时显示
+const formattedElapsedTime = computed(() => {
+  const elapsedSeconds = detectionProgress.value.elapsedTime
+  if (elapsedSeconds < 60) {
+    return `${elapsedSeconds.toFixed(1)}秒`
+  }
+  else {
+    const minutes = Math.floor(elapsedSeconds / 60)
+    const seconds = Math.floor(elapsedSeconds % 60)
+    return `${minutes}分${seconds}秒`
+  }
+})
+
+// 格式化平均FPS显示
+const formattedAverageFPS = computed(() => {
+  return detectionProgress.value.averageFPS.toFixed(1)
 })
 
 // 获取当前目录下所有视频的分镜分析结果
@@ -89,9 +131,6 @@ async function loadStoredSceneAnalysisResults() {
     return
   }
 
-  // 动态导入分析工具
-  const { loadThumbnailFromLocalDirectory, formatTimestamp } = await import('~/utils/video-analysis')
-
   console.log(`加载存储的分镜分析结果: ${directoryKey}`)
 
   for (const [videoName, storedResult] of Object.entries(storedResults)) {
@@ -116,6 +155,8 @@ async function loadStoredSceneAnalysisResults() {
               formattedTime: scene.formattedTime || formatTimestamp(scene.timestamp),
               formattedDuration: scene.formattedDuration,
               frameImageUrl,
+              // 恢复特征向量（如果存在）
+              imageFeatures: scene.imageFeatures ? new Float32Array(scene.imageFeatures) : undefined,
             }
           }),
         ),
@@ -155,6 +196,8 @@ function saveSceneAnalysisResults() {
         thumbnailFileName: scene.thumbnailFileName,
         duration: scene.duration,
         formattedDuration: scene.formattedDuration,
+        // 序列化特征向量为数组（如果存在）
+        imageFeatures: scene.imageFeatures ? Array.from(scene.imageFeatures) : undefined,
         // 不保存 frameImageUrl (blob URL)
       })),
     }
@@ -306,6 +349,14 @@ async function detectScenes() {
     currentVideoDuration: 0,
     currentVideoProgress: 0,
     processedFrames: 0,
+    isInitializing: false,
+    initializationMessage: '',
+    initializationStartTime: 0,
+    startTime: performance.now(),
+    currentTime: performance.now(),
+    elapsedTime: 0,
+    averageFPS: 0,
+    totalProcessedFrames: 0,
   }
 
   try {
@@ -322,9 +373,6 @@ async function detectScenes() {
 
     // 初始化进度
     detectionProgress.value.totalVideos = videoFileEntryItems.length
-
-    // 动态导入分镜检测工具
-    const { createVideoFrameSceneDetector, formatTimestamp, calculateSceneDurations } = await import('~/utils/video-analysis')
 
     toast.add({
       title: '开始分析',
@@ -345,6 +393,9 @@ async function detectScenes() {
       detectionProgress.value.currentVideoDuration = 0
       detectionProgress.value.currentVideoProgress = 0
       detectionProgress.value.processedFrames = 0
+
+      // 用于统计的帧计数器
+      let framesSinceLastUpdate = 0
 
       console.log(`开始分析视频: ${item.name} (${videoIndex + 1}/${videoFileEntryItems.length})`)
 
@@ -380,10 +431,31 @@ async function detectScenes() {
           {
             threshold: 0.3,
             scaledSize: 128,
+            enableFeatureExtraction: true, // 启用特征提取用于搜索
           },
           currentDirectoryHandle,
           item.name,
         )
+
+        // 显示初始化状态
+        detectionProgress.value.isInitializing = true
+        detectionProgress.value.initializationMessage = '正在初始化图像特征提取器...'
+        detectionProgress.value.initializationStartTime = performance.now()
+
+        // 初始化检测器（包括特征提取器）
+        try {
+          await sceneDetector.initialize()
+          console.log(`检测器初始化完成: ${item.name}`)
+        }
+        catch (error) {
+          console.warn(`检测器初始化失败: ${item.name}`, error)
+          // 初始化失败不影响分镜检测，继续执行
+        }
+
+        // 初始化完成，开始真正的帧处理计时
+        detectionProgress.value.isInitializing = false
+        detectionProgress.value.initializationMessage = ''
+        detectionProgress.value.startTime = performance.now() // 重新设置开始时间，排除初始化时间
 
         let totalFrames = 0
         let videoDuration = 0
@@ -403,6 +475,25 @@ async function detectScenes() {
           }
 
           totalFrames++
+          framesSinceLastUpdate++
+          detectionProgress.value.totalProcessedFrames++
+
+          // 计算性能统计（每处理100帧更新一次）
+          if (framesSinceLastUpdate >= 100) {
+            const currentTime = performance.now()
+
+            // 计算总体统计
+            detectionProgress.value.currentTime = currentTime
+            detectionProgress.value.elapsedTime = (currentTime - detectionProgress.value.startTime) / 1000
+
+            // 计算平均FPS
+            if (detectionProgress.value.elapsedTime > 0) {
+              detectionProgress.value.averageFPS = detectionProgress.value.totalProcessedFrames / detectionProgress.value.elapsedTime
+            }
+
+            // 重置计数器
+            framesSinceLastUpdate = 0
+          }
 
           // 更新帧处理进度
           detectionProgress.value.processedFrames = totalFrames
@@ -421,6 +512,14 @@ async function detectScenes() {
 
         // 获取最终结果
         const sceneChanges = sceneDetector.getSceneChanges()
+
+        // 完成分析并保存特征向量到本地文件系统（如果启用了特征提取）
+        try {
+          await sceneDetector.finishAnalysis()
+        }
+        catch (error) {
+          console.warn('保存特征向量到本地失败:', error)
+        }
 
         // 计算分镜长度
         const scenesWithDuration = calculateSceneDurations(sceneChanges, videoDuration)
@@ -487,6 +586,14 @@ async function detectScenes() {
       currentVideoDuration: 0,
       currentVideoProgress: 0,
       processedFrames: 0,
+      isInitializing: false,
+      initializationMessage: '',
+      initializationStartTime: 0,
+      startTime: 0,
+      currentTime: 0,
+      elapsedTime: 0,
+      averageFPS: 0,
+      totalProcessedFrames: 0,
     }
   }
 }
@@ -626,6 +733,129 @@ async function goBack() {
 
   entryItems.value = await listDirectoryEntryItems(currentPathDirectories.at(-1)?.handle as FileSystemDirectoryHandle)
 }
+
+// 搜索分镜函数
+async function searchScenes(query: string) {
+  if (!query.trim()) {
+    searchResults.value = []
+    hasSearched.value = false
+    return
+  }
+
+  isSearching.value = true
+  hasSearched.value = true
+  try {
+    // 动态导入文本搜索服务
+    const { TextSearchService } = await import('~/utils/text-search-service')
+
+    // 收集所有分镜数据进行搜索
+    const allScenesMap = new Map<string, SceneChangePoint[]>()
+
+    // 遍历当前目录的所有分析结果
+    for (const [videoName, result] of Object.entries(sceneAnalysisResults.value)) {
+      const scenesWithFeatures = result.sceneChanges.filter((scene) =>
+        (scene as SceneChangePoint & { imageFeatures?: Float32Array }).imageFeatures,
+      )
+
+      if (scenesWithFeatures.length > 0) {
+        allScenesMap.set(videoName, scenesWithFeatures)
+      }
+    }
+
+    if (allScenesMap.size === 0) {
+      toast.add({
+        title: '没有可搜索的分镜',
+        description: '请先进行带特征提取的分镜识别以生成可搜索的数据',
+        color: 'warning',
+      })
+      return
+    }
+
+    // 创建搜索服务实例
+    const searchService = new TextSearchService()
+
+    // 执行搜索
+    const results = await searchService.searchByText({
+      text: query,
+      limit: 10,
+      minSimilarity: 0.15,
+    }, allScenesMap)
+
+    // 更新搜索结果，添加分镜索引
+    searchResults.value = results.map((result) => {
+      // 找到分镜在原数组中的索引
+      const videoResult = sceneAnalysisResults.value[result.videoName]
+      const sceneIndex = videoResult?.sceneChanges.findIndex((scene) =>
+        scene.timestamp === result.scene.timestamp,
+      ) ?? -1
+
+      return {
+        videoName: result.videoName,
+        scene: result.scene,
+        similarity: result.similarity,
+        sceneIndex,
+      }
+    })
+
+    if (results.length === 0) {
+      toast.add({
+        title: '没有找到匹配的分镜',
+        description: `没有找到与 "${query}" 相关的分镜内容`,
+        color: 'warning',
+      })
+    }
+    else {
+      console.log(`搜索到 ${results.length} 个相关分镜`)
+    }
+  }
+  catch (error) {
+    console.error('搜索分镜失败:', error)
+    toast.add({
+      title: '搜索失败',
+      description: error instanceof Error ? error.message : '搜索过程中出现错误',
+      color: 'error',
+    })
+    searchResults.value = []
+  }
+  finally {
+    isSearching.value = false
+  }
+}
+
+// 防抖搜索
+let searchTimeoutId: ReturnType<typeof setTimeout> | null = null
+
+function debouncedSearch(query: string) {
+  if (searchTimeoutId) {
+    clearTimeout(searchTimeoutId)
+  }
+  searchTimeoutId = setTimeout(() => {
+    searchScenes(query)
+  }, 500)
+}
+
+// 处理搜索输入变化
+function handleSearchChange(event: Event) {
+  const target = event.target as HTMLInputElement
+  const query = target.value.trim()
+
+  if (query === '') {
+    searchResults.value = []
+    return
+  }
+
+  debouncedSearch(query)
+}
+
+// 处理搜索框清空
+function handleSearchClear() {
+  searchResults.value = []
+  hasSearched.value = false
+  if (searchTimeoutId) {
+    clearTimeout(searchTimeoutId)
+    searchTimeoutId = null
+  }
+}
 </script>
 
 <template>
@@ -733,10 +963,14 @@ async function goBack() {
               <div class="flex justify-between items-center">
                 <div class="flex gap-3">
                   <UInput
+                    v-model="searchQuery"
                     placeholder="搜索分镜"
-                    clearable
                     icon="heroicons:magnifying-glass"
+                    :loading="isSearching"
                     class="min-w-[200px]"
+                    clearable
+                    @change="handleSearchChange"
+                    @clear="handleSearchClear"
                   />
                   <UButton
                     :disabled="loading"
@@ -772,9 +1006,14 @@ async function goBack() {
             <div v-if="detectingScenesLoading" class="mt-4">
               <div class="flex justify-between items-center mb-2">
                 <div class="text-sm text-gray-400">
-                  正在分析: {{ detectionProgress.currentVideoName || '准备中...' }}
-                  <span v-if="detectionProgress.totalVideos > 0">
-                    ({{ detectionProgress.currentVideoIndex + 1 }}/{{ detectionProgress.totalVideos }})
+                  <span v-if="detectionProgress.isInitializing">
+                    正在初始化图像特征提取器...
+                  </span>
+                  <span v-else>
+                    正在分析: {{ detectionProgress.currentVideoName || '准备中...' }}
+                    <span v-if="detectionProgress.totalVideos > 0">
+                      ({{ detectionProgress.currentVideoIndex + 1 }}/{{ detectionProgress.totalVideos }})
+                    </span>
                   </span>
                 </div>
                 <div class="text-sm text-gray-400">
@@ -788,11 +1027,22 @@ async function goBack() {
                 size="sm"
                 class="w-full"
               />
-              <div class="text-xs text-gray-500 mt-1">
-                已处理帧数: {{ detectionProgress.processedFrames }}
-                <span v-if="detectionProgress.currentVideoDuration > 0">
-                  | 当前视频进度: {{ Math.round(detectionProgress.currentVideoProgress * 100) }}%
-                </span>
+              <div v-if="!detectionProgress.isInitializing" class="grid grid-cols-2 gap-4 text-xs text-gray-500 mt-2">
+                <div class="space-y-1">
+                  <div>已处理帧数: {{ detectionProgress.processedFrames.toLocaleString() }}</div>
+                  <div>总处理帧数: {{ detectionProgress.totalProcessedFrames.toLocaleString() }}</div>
+                  <div v-if="detectionProgress.currentVideoDuration > 0">
+                    当前视频进度: {{ Math.round(detectionProgress.currentVideoProgress * 100) }}%
+                  </div>
+                </div>
+                <div class="space-y-1">
+                  <div>处理耗时: {{ formattedElapsedTime }}</div>
+                  <div>平均 FPS: {{ formattedAverageFPS }}</div>
+                </div>
+              </div>
+              <div v-else class="text-xs text-gray-500 mt-2 text-center">
+                <UIcon name="heroicons:arrow-path" class="animate-spin mr-2" />
+                请稍候，正在进行初始化...
               </div>
             </div>
           </template>
@@ -811,7 +1061,7 @@ async function goBack() {
             </div>
           </div>
 
-          <div v-else class="space-y-2">
+          <!-- <div v-else class="space-y-2">
             <div
               v-for="item in filteredEntryItems"
               :key="item.name"
@@ -864,15 +1114,109 @@ async function goBack() {
                 </UButton>
               </div>
             </div>
+          </div> -->
+        </UCard>
+
+        <!-- 搜索结果展示 -->
+        <UCard v-if="hasSearchResults" class="mt-6">
+          <template #header>
+            <div class="flex justify-between items-center">
+              <h3 class="text-lg font-semibold text-gray-200">
+                搜索结果
+              </h3>
+              <div class="text-sm text-gray-400">
+                找到 {{ searchResults.length }} 个匹配的分镜
+              </div>
+            </div>
+          </template>
+
+          <div class="space-y-4">
+            <!-- 搜索结果网格 -->
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+              <div
+                v-for="(result, index) in searchResults"
+                :key="`${result.videoName}-${result.sceneIndex}`"
+                class="group relative border border-gray-600 rounded-lg overflow-hidden hover:border-primary-500 transition-colors cursor-pointer"
+                @click="() => { const videoResult = sceneAnalysisResults[result.videoName]; if (videoResult) previewScene(result.scene, result.videoName, videoResult) }"
+              >
+                <div class="aspect-video bg-gray-800 flex items-center justify-center">
+                  <img
+                    v-if="result.scene.frameImageUrl"
+                    :src="result.scene.frameImageUrl"
+                    :alt="`搜索结果 ${index + 1} - ${result.scene.formattedTime}`"
+                    class="w-full h-full object-cover"
+                    loading="lazy"
+                  >
+                  <div v-else class="text-gray-500 text-sm">
+                    <UIcon name="heroicons:photo" size="24" />
+                  </div>
+                </div>
+
+                <!-- 分镜信息 -->
+                <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent text-white text-xs p-2">
+                  <div class="flex justify-between items-end">
+                    <div>
+                      <div class="font-medium">
+                        {{ result.scene.formattedTime }}
+                      </div>
+                      <div class="text-gray-300 truncate max-w-[80px]" :title="result.videoName">
+                        {{ result.videoName }}
+                      </div>
+                    </div>
+                    <div class="text-right">
+                      <div class="font-medium text-primary-300">
+                        {{ Math.round(result.similarity * 100) }}%
+                      </div>
+                      <div class="text-gray-400 text-[10px]">
+                        相似度
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 悬停时显示更多信息 -->
+                <div class="absolute inset-0 bg-black/80 transition-opacity flex items-center justify-center opacity-0 group-hover:opacity-100">
+                  <div class="text-white text-center px-2">
+                    <div class="text-sm font-medium mb-1">
+                      点击预览分镜
+                    </div>
+                    <div class="text-xs space-y-1">
+                      <div>相似度: {{ Math.round(result.similarity * 100) }}%</div>
+                      <div>视频: {{ result.videoName }}</div>
+                      <div>时间: {{ result.scene.formattedTime }}</div>
+                      <div v-if="result.scene.formattedDuration">
+                        时长: {{ result.scene.formattedDuration }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </UCard>
+
+        <!-- 空搜索结果提示 - 只有在实际搜索后且无结果时才显示 -->
+        <UCard v-if="searchQuery.trim() && !hasSearchResults && !isSearching && hasSearched" class="mt-6">
+          <div class="py-12 text-center">
+            <UIcon name="heroicons:magnifying-glass" size="32" class="text-gray-500 mb-4" />
+            <h3 class="text-lg font-semibold text-gray-300 mb-2">
+              没有找到匹配的分镜
+            </h3>
+            <p class="text-gray-400 mb-4">
+              尝试使用不同的搜索关键词，或确认已进行分镜识别
+            </p>
+            <div class="text-sm text-gray-500">
+              搜索词: "{{ searchQuery }}"
+            </div>
           </div>
         </UCard>
 
         <!-- 分镜分析结果展示 -->
-        <UCard v-if="hasSceneAnalysisResults" class="mt-6">
+        <UCard v-if="hasSceneAnalysisResults && !hasSearchResults" class="mt-6">
           <template #header>
             <div class="flex justify-between items-center">
               <h3 class="text-lg font-semibold text-gray-200">
-                分镜分析结果
+                分镜
               </h3>
             </div>
           </template>
