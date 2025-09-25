@@ -235,13 +235,6 @@ async function cleanupMissingVideoResults() {
   // 如果有变化，更新存储
   if (hasChanges) {
     storedSceneAnalysisResults.value[directoryKey] = updatedStoredResults
-    console.log(`已清理 ${directoryKey} 目录中不存在视频的分析结果`)
-
-    toast.add({
-      title: '清理完成',
-      description: '已清理不存在视频文件的分析结果',
-      color: 'info',
-    })
   }
 }
 
@@ -365,12 +358,6 @@ async function enterDirectory(directoryData: StoredDirectoryInfo) {
     else {
       // 权限失效，从列表中移除
       await removeDirectory(directoryData.id)
-
-      toast.add({
-        title: '目录权限已失效',
-        description: '目录权限已失效，已从列表中移除',
-        color: 'warning',
-      })
     }
   }
   catch (error) {
@@ -383,16 +370,6 @@ async function enterDirectory(directoryData: StoredDirectoryInfo) {
   }
   finally {
     loading.value = false
-  }
-}
-
-// 进入子目录
-async function _enterSubDirectory(item: EntryItem) {
-  if (item.kind === 'directory') {
-    currentPathDirectories.push({ name: item.name, handle: item.handle as FileSystemDirectoryHandle })
-    entryItems.value = await listDirectoryEntryItems(item.handle as FileSystemDirectoryHandle)
-    // 进入子目录后尝试加载存储的分镜分析结果
-    await loadStoredSceneAnalysisResults()
   }
 }
 
@@ -540,23 +517,8 @@ async function detectScenes() {
     // 清理不存在的视频文件的分析结果
     await cleanupMissingVideoResults()
 
-    if (videoFiles.length === 0) {
-      toast.add({
-        title: '没有视频文件',
-        description: '当前目录及其子目录中没有找到 MP4 视频文件',
-        color: 'warning',
-      })
-      return
-    }
-
     // 初始化进度
     detectionProgress.value.totalVideos = videoFiles.length
-
-    toast.add({
-      title: '开始分析',
-      description: `开始分析 ${videoFiles.length} 个视频文件的分镜（包含子目录）`,
-      color: 'info',
-    })
 
     for (let videoIndex = 0; videoIndex < videoFiles.length; videoIndex++) {
       const videoFile = videoFiles[videoIndex]
@@ -590,11 +552,6 @@ async function detectScenes() {
 
         if (!videoTrack) {
           console.warn(`无法获取视频轨道: ${videoFile.relativePath}`)
-          toast.add({
-            title: '跳过文件',
-            description: `${videoFile.relativePath}: 无法获取视频轨道`,
-            color: 'warning',
-          })
           continue
         }
 
@@ -629,7 +586,6 @@ async function detectScenes() {
         // 初始化完成，开始真正的帧处理计时
         detectionProgress.value.isInitializing = false
         detectionProgress.value.initializationMessage = ''
-        detectionProgress.value.startTime = performance.now() // 重新设置开始时间，排除初始化时间
 
         let totalFrames = 0
         let videoDuration = 0
@@ -660,7 +616,7 @@ async function detectScenes() {
             detectionProgress.value.currentTime = currentTime
             detectionProgress.value.elapsedTime = (currentTime - detectionProgress.value.startTime) / 1000
 
-            // 计算平均FPS
+            // 计算整个任务的平均FPS（基于总体处理统计）
             if (detectionProgress.value.elapsedTime > 0) {
               detectionProgress.value.averageFPS = detectionProgress.value.totalProcessedFrames / detectionProgress.value.elapsedTime
             }
@@ -698,12 +654,6 @@ async function detectScenes() {
         // 计算分镜长度
         const scenesWithDuration = calculateSceneDurations(sceneChanges, videoDuration)
 
-        console.log(`分析完成: ${videoFile.relativePath}`)
-        console.log(`总帧数: ${totalFrames}`)
-        console.log(`视频时长: ${formatTimestamp(videoDuration)}`)
-        console.log(`检测到的分镜数: ${scenesWithDuration.length}`)
-        console.log('分镜时间点:', scenesWithDuration.map((scene) => `${formatTimestamp(scene.timestamp)} (${scene.formattedDuration || '未知'})`))
-
         // 保存分析结果
         const analysisResult: VideoAnalysisResult = {
           videoName: videoFile.relativePath,
@@ -722,13 +672,6 @@ async function detectScenes() {
         }
 
         sceneAnalysisResults.value[videoFile.relativePath] = analysisResult
-
-        // 显示结果通知
-        toast.add({
-          title: '分镜分析完成',
-          description: `${videoFile.relativePath}: 检测到 ${scenesWithDuration.length} 个分镜切换点，视频时长 ${formatTimestamp(videoDuration)}`,
-          color: 'success',
-        })
       }
       catch (error) {
         console.error(`分析视频失败: ${videoFile.relativePath}`, error)
@@ -841,29 +784,6 @@ function isTextFile(filename: string): boolean {
   const textExtensions = ['txt', 'md', 'js', 'ts', 'json', 'html', 'css', 'vue', 'py', 'java', 'cpp', 'c', 'h', 'xml', 'yml', 'yaml']
   const ext = filename.split('.').pop()?.toLowerCase()
   return textExtensions.includes(ext || '')
-}
-
-// 下载文件（未使用）
-async function _downloadFileWrapper(item: EntryItem) {
-  if (item.kind === 'directory') {
-    return
-  }
-
-  try {
-    const fileHandle = item.handle as FileSystemFileHandle
-    await downloadFile(fileHandle, item.name)
-    toast.add({
-      title: '文件下载已开始',
-      color: 'success',
-    })
-  }
-  catch (error: any) {
-    toast.add({
-      title: '下载文件失败',
-      description: error.message,
-      color: 'error',
-    })
-  }
 }
 
 // 预览分镜
@@ -1177,7 +1097,7 @@ function handleSearchClear() {
           <div class="flex justify-between items-center mb-2">
             <div class="text-sm text-gray-400">
               <span v-if="detectionProgress.isInitializing">
-                正在初始化图像特征提取器...
+                正在下载 & 初始化 CLIP 模型，首次耗时较长，请稍候...
               </span>
               <span v-else>
                 正在分析: {{ detectionProgress.currentVideoName || '准备中...' }}
@@ -1197,22 +1117,16 @@ function handleSearchClear() {
             size="sm"
             class="w-full"
           />
-          <div v-if="!detectionProgress.isInitializing" class="grid grid-cols-2 gap-4 text-xs text-gray-500 mt-2">
+          <div class="grid grid-cols-2 gap-4 text-xs text-gray-500 mt-2">
             <div class="space-y-1">
               <div>已处理帧数: {{ detectionProgress.processedFrames.toLocaleString() }}</div>
               <div>总处理帧数: {{ detectionProgress.totalProcessedFrames.toLocaleString() }}</div>
-              <div v-if="detectionProgress.currentVideoDuration > 0">
-                当前视频进度: {{ Math.round(detectionProgress.currentVideoProgress * 100) }}%
-              </div>
+              <div>当前视频进度: {{ Math.round(detectionProgress.currentVideoProgress * 100) }}%</div>
             </div>
             <div class="space-y-1">
               <div>处理耗时: {{ formattedElapsedTime }}</div>
               <div>平均 FPS: {{ formattedAverageFPS }}</div>
             </div>
-          </div>
-          <div v-else class="text-xs text-gray-500 mt-2 text-center">
-            <UIcon name="heroicons:arrow-path" class="animate-spin mr-2" />
-            请稍候，正在进行初始化...
           </div>
         </div>
 
