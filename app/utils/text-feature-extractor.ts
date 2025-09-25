@@ -133,8 +133,6 @@ export class CLIPTextExtractor {
         console.log('对文本特征进行 L2 归一化')
         finalFeatures = CLIPTextExtractor.normalizeFeatures(featureArray)
       }
-
-      console.log(`文本特征向量提取完成，维度: ${finalFeatures.length}`)
       return finalFeatures
     }
     catch (error) {
@@ -181,8 +179,6 @@ export class CLIPTextExtractor {
     const textMagnitude = Math.sqrt(textFeatures.reduce((sum, val) => sum + val * val, 0))
     const imageMagnitude = Math.sqrt(imageFeatures.reduce((sum, val) => sum + val * val, 0))
 
-    console.log(`输入向量模长 - 文本: ${textMagnitude.toFixed(4)}, 图像: ${imageMagnitude.toFixed(4)}`)
-
     // 如果向量已经接近归一化（模长接近1），就直接使用
     // 否则进行归一化处理
     let normalizedTextFeatures = textFeatures
@@ -206,8 +202,6 @@ export class CLIPTextExtractor {
       dotProduct += textF * imageF
     }
 
-    console.log(`余弦相似度点积: ${dotProduct.toFixed(6)}`)
-
     // 确保余弦相似度在合理范围内
     if (Math.abs(dotProduct) > 1.1) {
       console.error(`异常的余弦相似度: ${dotProduct}，重新计算...`)
@@ -228,11 +222,7 @@ export class CLIPTextExtractor {
     dotProduct = Math.max(-1, Math.min(1, dotProduct))
 
     // 转换为 [0, 1] 范围
-    const similarity = (dotProduct + 1) / 2
-
-    console.log(`最终相似度: ${similarity.toFixed(4)} (${(similarity * 100).toFixed(2)}%)`)
-
-    return similarity
+    return (dotProduct + 1) / 2
   }
 
   /**

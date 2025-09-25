@@ -55,7 +55,6 @@ const currentDirectoryKey = computed(() => {
   return currentPathDirectories.map((dir) => dir.name).join('/')
 })
 const isHome = computed(() => currentPathDirectories.length === 0)
-const filteredEntryItems = computed(() => entryItems.value.filter((item) => item.kind === 'directory' || (item.kind === 'file' && item.name.endsWith('.mp4'))))
 
 // 是否显示搜索结果
 const hasSearchResults = computed(() => searchResults.value.length > 0)
@@ -296,7 +295,6 @@ async function loadStoredSceneAnalysisResults() {
       }
 
       sceneAnalysisResults.value[videoName] = runtimeResult
-      console.log(`已加载视频 ${videoName} 的分镜分析结果: ${runtimeResult.totalScenes} 个分镜`)
     }
     catch (error) {
       console.warn(`加载视频 ${videoName} 的分镜分析结果失败:`, error)
