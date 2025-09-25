@@ -29,6 +29,32 @@ function formatTime(seconds: number): string {
   return `${minutes}:${secs.toString().padStart(2, '0')}`
 }
 
+// 获取视频文件句柄（支持子目录）
+async function getVideoFileHandle(directoryHandle: FileSystemDirectoryHandle, videoPath: string): Promise<FileSystemFileHandle> {
+  const pathParts = videoPath.split('/').filter((part) => part.length > 0)
+  let currentHandle: FileSystemDirectoryHandle | FileSystemFileHandle = directoryHandle
+
+  // 遍历路径的每一部分
+  for (let i = 0; i < pathParts.length; i++) {
+    const part = pathParts[i]
+
+    if (!part) {
+      throw new Error('Invalid path part')
+    }
+
+    if (i === pathParts.length - 1) {
+      // 最后一部分是文件名
+      return await (currentHandle as FileSystemDirectoryHandle).getFileHandle(part)
+    }
+    else {
+      // 中间部分是目录名
+      currentHandle = await (currentHandle as FileSystemDirectoryHandle).getDirectoryHandle(part)
+    }
+  }
+
+  throw new Error('Invalid path')
+}
+
 // 初始化视频
 async function initializeVideo() {
   if (!props.currentDirectoryHandle || videoUrl.value) {
@@ -36,8 +62,8 @@ async function initializeVideo() {
   }
 
   try {
-    // 从当前目录获取视频文件句柄
-    const videoFileHandle = await props.currentDirectoryHandle.getFileHandle(props.videoName)
+    // 使用新的辅助函数获取视频文件句柄（支持子目录）
+    const videoFileHandle = await getVideoFileHandle(props.currentDirectoryHandle, props.videoName)
     const file = await videoFileHandle.getFile()
     videoUrl.value = URL.createObjectURL(file)
 
@@ -219,11 +245,11 @@ onMounted(() => {
               <span class="ml-2 text-gray-200">{{ scene.formattedTime }}</span>
             </div>
             <div>
-              <span class="text-gray-400">分镜长度:</span>
+              <span class="text-gray-400">分镜时长:</span>
               <span class="ml-2 text-gray-200">{{ scene.formattedDuration || '未知' }}</span>
             </div>
             <div>
-              <span class="text-gray-400">差异度:</span>
+              <span class="text-gray-400">分镜差异度:</span>
               <span class="ml-2 text-gray-200">{{ Math.round(scene.score * 100) }}%</span>
             </div>
             <div>

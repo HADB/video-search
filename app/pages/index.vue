@@ -96,22 +96,155 @@ const formattedAverageFPS = computed(() => {
   return detectionProgress.value.averageFPS.toFixed(1)
 })
 
-// 获取当前目录下所有视频的分镜分析结果
+// 获取当前目录下所有视频的分镜分析结果（包括子目录）
 const currentDirectorySceneResults = computed(() => {
-  const videoNames = filteredEntryItems.value
-    .filter((item) => item.kind === 'file' && item.name.endsWith('.mp4'))
-    .map((item) => item.name)
-
-  return Object.entries(sceneAnalysisResults.value)
-    .filter(([videoName]) => videoNames.includes(videoName))
-    .reduce((acc, [videoName, result]) => {
-      acc[videoName] = result
-      return acc
-    }, {} as SceneAnalysisResultsMap)
+  // 直接返回当前存储的所有分析结果，因为现在使用相对路径作为键
+  return sceneAnalysisResults.value
 })
 
 // 检查是否有分镜分析结果
 const hasSceneAnalysisResults = computed(() => Object.keys(currentDirectorySceneResults.value).length > 0)
+
+// 获取所有文件的分镜场景合并到一起展示
+const allScenes = computed(() => {
+  const scenes: Array<{
+    scene: SceneChangePoint
+    videoName: string
+    sceneIndex: number
+    result: VideoAnalysisResult
+  }> = []
+
+  Object.entries(currentDirectorySceneResults.value).forEach(([videoName, result]) => {
+    result.sceneChanges.forEach((scene, index) => {
+      scenes.push({
+        scene,
+        videoName,
+        sceneIndex: index,
+        result,
+      })
+    })
+  })
+
+  // 先按文件名排序，再按时间戳排序
+  return scenes.sort((a, b) => {
+    // 首先按视频文件名排序
+    const fileComparison = a.videoName.localeCompare(b.videoName)
+    if (fileComparison !== 0) {
+      return fileComparison
+    }
+    // 文件名相同时，按时间戳排序
+    return a.scene.timestamp - b.scene.timestamp
+  })
+})
+
+// 清理不存在的视频文件的分析结果
+async function cleanupMissingVideoResults() {
+  const directoryKey = currentDirectoryKey.value
+  if (!directoryKey) {
+    return
+  }
+
+  const currentDirectoryHandle = currentPathDirectories[currentPathDirectories.length - 1]?.handle
+  if (!currentDirectoryHandle) {
+    return
+  }
+
+  // 获取当前目录中所有实际存在的视频文件
+  const existingVideoFiles = await getAllVideoFiles(currentDirectoryHandle)
+  const existingVideoPaths = new Set(existingVideoFiles.map((file) => file.relativePath))
+
+  // 检查存储的结果中是否有已经不存在的视频文件
+  const storedResults = storedSceneAnalysisResults.value[directoryKey]
+  if (!storedResults) {
+    return
+  }
+
+  let hasChanges = false
+  const updatedStoredResults = { ...storedResults }
+
+  // 清理存储的结果
+  for (const videoPath of Object.keys(storedResults)) {
+    if (!existingVideoPaths.has(videoPath)) {
+      console.log(`清理已删除视频的分析结果: ${videoPath}`)
+      delete updatedStoredResults[videoPath]
+      hasChanges = true
+    }
+  }
+
+  // 清理运行时结果
+  for (const videoPath of Object.keys(sceneAnalysisResults.value)) {
+    if (!existingVideoPaths.has(videoPath)) {
+      console.log(`清理已删除视频的运行时结果: ${videoPath}`)
+      // 清理 blob URLs
+      const result = sceneAnalysisResults.value[videoPath]
+      if (result) {
+        result.sceneChanges.forEach((scene) => {
+          if (scene.frameImageUrl) {
+            URL.revokeObjectURL(scene.frameImageUrl)
+          }
+        })
+      }
+      delete sceneAnalysisResults.value[videoPath]
+      hasChanges = true
+    }
+  }
+
+  // 清理对应的缩略图文件
+  if (hasChanges) {
+    try {
+      const thumbnailsDir = await currentDirectoryHandle.getDirectoryHandle('thumbnails')
+
+      // 收集所有现存视频对应的缩略图文件名
+      const validThumbnailFiles = new Set<string>()
+
+      // 从运行时结果收集
+      for (const result of Object.values(sceneAnalysisResults.value)) {
+        result.sceneChanges.forEach((scene) => {
+          if (scene.thumbnailFileName) {
+            validThumbnailFiles.add(scene.thumbnailFileName)
+          }
+        })
+      }
+
+      // 从存储结果收集
+      for (const result of Object.values(updatedStoredResults)) {
+        result.sceneChanges.forEach((scene: any) => {
+          if (scene.thumbnailFileName) {
+            validThumbnailFiles.add(scene.thumbnailFileName)
+          }
+        })
+      }
+
+      // 删除不再需要的缩略图文件
+      for await (const [fileName] of thumbnailsDir.entries()) {
+        if (!validThumbnailFiles.has(fileName)) {
+          try {
+            await thumbnailsDir.removeEntry(fileName)
+            console.log(`已删除无用的缩略图文件: ${fileName}`)
+          }
+          catch (error) {
+            console.warn(`删除缩略图文件失败: ${fileName}`, error)
+          }
+        }
+      }
+    }
+    catch (error) {
+      console.warn('清理缩略图文件失败:', error)
+    }
+  }
+
+  // 如果有变化，更新存储
+  if (hasChanges) {
+    storedSceneAnalysisResults.value[directoryKey] = updatedStoredResults
+    console.log(`已清理 ${directoryKey} 目录中不存在视频的分析结果`)
+
+    toast.add({
+      title: '清理完成',
+      description: '已清理不存在视频文件的分析结果',
+      color: 'info',
+    })
+  }
+}
 
 // 从存储加载分镜分析结果
 async function loadStoredSceneAnalysisResults() {
@@ -169,6 +302,9 @@ async function loadStoredSceneAnalysisResults() {
       console.warn(`加载视频 ${videoName} 的分镜分析结果失败:`, error)
     }
   }
+
+  // 加载完成后，清理不存在的视频文件的分析结果
+  await cleanupMissingVideoResults()
 }
 
 // 保存分镜分析结果到存储
@@ -253,7 +389,7 @@ async function enterDirectory(directoryData: StoredDirectoryInfo) {
 }
 
 // 进入子目录
-async function enterSubDirectory(item: EntryItem) {
+async function _enterSubDirectory(item: EntryItem) {
   if (item.kind === 'directory') {
     currentPathDirectories.push({ name: item.name, handle: item.handle as FileSystemDirectoryHandle })
     entryItems.value = await listDirectoryEntryItems(item.handle as FileSystemDirectoryHandle)
@@ -334,6 +470,35 @@ async function addNewDirectory() {
   }
 }
 
+// 递归扫描目录中的所有视频文件
+async function getAllVideoFiles(directoryHandle: FileSystemDirectoryHandle, basePath = ''): Promise<Array<{ name: string, handle: FileSystemFileHandle, relativePath: string }>> {
+  const videoFiles: Array<{ name: string, handle: FileSystemFileHandle, relativePath: string }> = []
+
+  try {
+    for await (const [name, handle] of directoryHandle.entries()) {
+      const currentPath = basePath ? `${basePath}/${name}` : name
+
+      if (handle.kind === 'file' && name.endsWith('.mp4')) {
+        videoFiles.push({
+          name,
+          handle,
+          relativePath: currentPath,
+        })
+      }
+      else if (handle.kind === 'directory') {
+        // 递归扫描子目录
+        const subDirectoryVideos = await getAllVideoFiles(handle, currentPath)
+        videoFiles.push(...subDirectoryVideos)
+      }
+    }
+  }
+  catch (error) {
+    console.warn(`扫描目录失败: ${basePath}`, error)
+  }
+
+  return videoFiles
+}
+
 async function detectScenes() {
   if (detectingScenesLoading.value) {
     return
@@ -360,36 +525,51 @@ async function detectScenes() {
   }
 
   try {
-    const videoFileEntryItems = filteredEntryItems.value.filter((item) => item.kind === 'file' && item.name.endsWith('.mp4'))
+    // 获取当前目录句柄
+    const currentDirectoryHandle = currentPathDirectories[currentPathDirectories.length - 1]?.handle
+    if (!currentDirectoryHandle) {
+      toast.add({
+        title: '目录访问失败',
+        description: '无法访问当前目录',
+        color: 'error',
+      })
+      return
+    }
 
-    if (videoFileEntryItems.length === 0) {
+    // 递归扫描所有视频文件
+    const videoFiles = await getAllVideoFiles(currentDirectoryHandle)
+
+    // 清理不存在的视频文件的分析结果
+    await cleanupMissingVideoResults()
+
+    if (videoFiles.length === 0) {
       toast.add({
         title: '没有视频文件',
-        description: '当前目录中没有找到 MP4 视频文件',
+        description: '当前目录及其子目录中没有找到 MP4 视频文件',
         color: 'warning',
       })
       return
     }
 
     // 初始化进度
-    detectionProgress.value.totalVideos = videoFileEntryItems.length
+    detectionProgress.value.totalVideos = videoFiles.length
 
     toast.add({
       title: '开始分析',
-      description: `开始分析 ${videoFileEntryItems.length} 个视频文件的分镜`,
+      description: `开始分析 ${videoFiles.length} 个视频文件的分镜（包含子目录）`,
       color: 'info',
     })
 
-    for (let videoIndex = 0; videoIndex < videoFileEntryItems.length; videoIndex++) {
-      const item = videoFileEntryItems[videoIndex]
+    for (let videoIndex = 0; videoIndex < videoFiles.length; videoIndex++) {
+      const videoFile = videoFiles[videoIndex]
 
-      if (!item) {
+      if (!videoFile) {
         continue
       }
 
       // 更新当前视频进度
       detectionProgress.value.currentVideoIndex = videoIndex
-      detectionProgress.value.currentVideoName = item.name
+      detectionProgress.value.currentVideoName = videoFile.relativePath
       detectionProgress.value.currentVideoDuration = 0
       detectionProgress.value.currentVideoProgress = 0
       detectionProgress.value.processedFrames = 0
@@ -397,11 +577,10 @@ async function detectScenes() {
       // 用于统计的帧计数器
       let framesSinceLastUpdate = 0
 
-      console.log(`开始分析视频: ${item.name} (${videoIndex + 1}/${videoFileEntryItems.length})`)
+      console.log(`开始分析视频: ${videoFile.relativePath} (${videoIndex + 1}/${videoFiles.length})`)
 
       try {
-        const fileHandle = item.handle as FileSystemFileHandle
-        const file = await readFile(fileHandle)
+        const file = await readFile(videoFile.handle)
         const blobSource = new BlobSource(file)
         const input = new Input({ source: blobSource, formats: ALL_FORMATS })
         const duration = await input.computeDuration()
@@ -412,10 +591,10 @@ async function detectScenes() {
         const videoTrack = await input.getPrimaryVideoTrack()
 
         if (!videoTrack) {
-          console.warn(`无法获取视频轨道: ${item.name}`)
+          console.warn(`无法获取视频轨道: ${videoFile.relativePath}`)
           toast.add({
             title: '跳过文件',
-            description: `${item.name}: 无法获取视频轨道`,
+            description: `${videoFile.relativePath}: 无法获取视频轨道`,
             color: 'warning',
           })
           continue
@@ -423,10 +602,7 @@ async function detectScenes() {
 
         const videoSampleSink = new VideoSampleSink(videoTrack)
 
-        // 获取当前目录句柄用于保存缩略图
-        const currentDirectoryHandle = currentPathDirectories[currentPathDirectories.length - 1]?.handle
-
-        // 创建分镜检测器（传入目录句柄和视频名称以保存缩略图）
+        // 创建分镜检测器（传入目录句柄和视频的相对路径以保存缩略图）
         const sceneDetector = createVideoFrameSceneDetector(
           {
             threshold: 0.3,
@@ -434,7 +610,7 @@ async function detectScenes() {
             enableFeatureExtraction: true, // 启用特征提取用于搜索
           },
           currentDirectoryHandle,
-          item.name,
+          videoFile.relativePath, // 使用相对路径作为文件标识
         )
 
         // 显示初始化状态
@@ -445,10 +621,10 @@ async function detectScenes() {
         // 初始化检测器（包括特征提取器）
         try {
           await sceneDetector.initialize()
-          console.log(`检测器初始化完成: ${item.name}`)
+          console.log(`检测器初始化完成: ${videoFile.relativePath}`)
         }
         catch (error) {
-          console.warn(`检测器初始化失败: ${item.name}`, error)
+          console.warn(`检测器初始化失败: ${videoFile.relativePath}`, error)
           // 初始化失败不影响分镜检测，继续执行
         }
 
@@ -471,7 +647,7 @@ async function detectScenes() {
           const result = await sceneDetector.processFrame(videoFrame, sample.timestamp)
 
           if (result.isSceneChange) {
-            console.log(`检测到分镜切换: ${item.name} 时间点: ${formatTimestamp(sample.timestamp)}`)
+            console.log(`检测到分镜切换: ${videoFile.relativePath} 时间点: ${formatTimestamp(sample.timestamp)}`)
           }
 
           totalFrames++
@@ -524,7 +700,7 @@ async function detectScenes() {
         // 计算分镜长度
         const scenesWithDuration = calculateSceneDurations(sceneChanges, videoDuration)
 
-        console.log(`分析完成: ${item.name}`)
+        console.log(`分析完成: ${videoFile.relativePath}`)
         console.log(`总帧数: ${totalFrames}`)
         console.log(`视频时长: ${formatTimestamp(videoDuration)}`)
         console.log(`检测到的分镜数: ${scenesWithDuration.length}`)
@@ -532,7 +708,7 @@ async function detectScenes() {
 
         // 保存分析结果
         const analysisResult: VideoAnalysisResult = {
-          videoName: item.name,
+          videoName: videoFile.relativePath,
           timestamp: new Date().toISOString(),
           totalScenes: scenesWithDuration.length,
           duration: videoDuration,
@@ -544,23 +720,23 @@ async function detectScenes() {
             threshold: 0.3,
             scaledSize: 128,
           },
-          fileHandle: item.handle as FileSystemFileHandle,
+          fileHandle: videoFile.handle,
         }
 
-        sceneAnalysisResults.value[item.name] = analysisResult
+        sceneAnalysisResults.value[videoFile.relativePath] = analysisResult
 
         // 显示结果通知
         toast.add({
           title: '分镜分析完成',
-          description: `${item.name}: 检测到 ${scenesWithDuration.length} 个分镜切换点，视频时长 ${formatTimestamp(videoDuration)}`,
+          description: `${videoFile.relativePath}: 检测到 ${scenesWithDuration.length} 个分镜切换点，视频时长 ${formatTimestamp(videoDuration)}`,
           color: 'success',
         })
       }
       catch (error) {
-        console.error(`分析视频失败: ${item.name}`, error)
+        console.error(`分析视频失败: ${videoFile.relativePath}`, error)
         toast.add({
           title: '分析失败',
-          description: `${item.name}: ${error instanceof Error ? error.message : '未知错误'}`,
+          description: `${videoFile.relativePath}: ${error instanceof Error ? error.message : '未知错误'}`,
           color: 'error',
         })
       }
@@ -598,8 +774,8 @@ async function detectScenes() {
   }
 }
 
-// 预览文件
-async function previewFileContent(item: EntryItem) {
+// 预览文件（未使用）
+async function _previewFileContent(item: EntryItem) {
   if (item.kind === 'directory') {
     return
   }
@@ -669,8 +845,8 @@ function isTextFile(filename: string): boolean {
   return textExtensions.includes(ext || '')
 }
 
-// 下载文件
-async function downloadFileWrapper(item: EntryItem) {
+// 下载文件（未使用）
+async function _downloadFileWrapper(item: EntryItem) {
   if (item.kind === 'directory') {
     return
   }
@@ -948,174 +1124,99 @@ function handleSearchClear() {
       </div>
 
       <!-- 目录浏览视图 -->
-      <div v-if="!isHome">
-        <!-- 文件列表 -->
-        <UCard
-          class="mb-6"
-        >
-          <template #header>
-            <div class="flex justify-between items-center">
-              <div class="flex items-center gap-3">
-                <span class="font-mono bg-gray-800 px-3 py-1 rounded border border-gray-700 text-sm text-gray-200">
-                  {{ currentPath || '未选择目录' }}
-                </span>
-              </div>
-              <div class="flex justify-between items-center">
-                <div class="flex gap-3">
-                  <UInput
-                    v-model="searchQuery"
-                    placeholder="搜索分镜"
-                    icon="heroicons:magnifying-glass"
-                    :loading="isSearching"
-                    class="min-w-[200px]"
-                    clearable
-                    @change="handleSearchChange"
-                    @clear="handleSearchClear"
-                  />
-                  <UButton
-                    :disabled="loading"
-                    variant="outline"
-                    icon="heroicons:home"
-                    @click="goHome"
-                  >
-                    返回首页
-                  </UButton>
-                  <UButton
-                    :disabled="loading"
-                    variant="outline"
-                    icon="heroicons:arrow-left"
-                    @click="goBack"
-                  >
-                    返回上级
-                  </UButton>
-                  <UButton
-                    :disabled="loading || detectingScenesLoading"
-                    :loading="detectingScenesLoading"
-                    variant="outline"
-                    color="primary"
-                    icon="heroicons:document-magnifying-glass"
-                    @click="detectScenes"
-                  >
-                    {{ detectingScenesLoading ? '分析中...' : '识别分镜' }}
-                  </UButton>
-                </div>
-              </div>
-            </div>
-
-            <!-- 分镜识别进度条 -->
-            <div v-if="detectingScenesLoading" class="mt-4">
-              <div class="flex justify-between items-center mb-2">
-                <div class="text-sm text-gray-400">
-                  <span v-if="detectionProgress.isInitializing">
-                    正在初始化图像特征提取器...
-                  </span>
-                  <span v-else>
-                    正在分析: {{ detectionProgress.currentVideoName || '准备中...' }}
-                    <span v-if="detectionProgress.totalVideos > 0">
-                      ({{ detectionProgress.currentVideoIndex + 1 }}/{{ detectionProgress.totalVideos }})
-                    </span>
-                  </span>
-                </div>
-                <div class="text-sm text-gray-400">
-                  {{ detectionProgressPercentage }}%
-                </div>
-              </div>
-              <UProgress
-                v-model="detectionProgressPercentage"
-                :max="100"
-                color="primary"
-                size="sm"
-                class="w-full"
+      <div v-if="!isHome" class="mb-6">
+        <div class="flex justify-between items-center mb-4">
+          <div class="flex items-center gap-3">
+            <span class="text-sm text-gray-400">当前目录:</span>
+            <span class="font-mono bg-gray-800 px-3 py-1.5 rounded-md border border-gray-600 text-sm text-gray-100">
+              {{ currentPath || '未选择目录' }}
+            </span>
+          </div>
+          <div class="flex justify-between items-center">
+            <div class="flex gap-3">
+              <UInput
+                v-model="searchQuery"
+                placeholder="搜索分镜"
+                icon="heroicons:magnifying-glass"
+                :loading="isSearching"
+                class="min-w-[200px]"
+                clearable
+                @change="handleSearchChange"
+                @clear="handleSearchClear"
               />
-              <div v-if="!detectionProgress.isInitializing" class="grid grid-cols-2 gap-4 text-xs text-gray-500 mt-2">
-                <div class="space-y-1">
-                  <div>已处理帧数: {{ detectionProgress.processedFrames.toLocaleString() }}</div>
-                  <div>总处理帧数: {{ detectionProgress.totalProcessedFrames.toLocaleString() }}</div>
-                  <div v-if="detectionProgress.currentVideoDuration > 0">
-                    当前视频进度: {{ Math.round(detectionProgress.currentVideoProgress * 100) }}%
-                  </div>
-                </div>
-                <div class="space-y-1">
-                  <div>处理耗时: {{ formattedElapsedTime }}</div>
-                  <div>平均 FPS: {{ formattedAverageFPS }}</div>
-                </div>
-              </div>
-              <div v-else class="text-xs text-gray-500 mt-2 text-center">
-                <UIcon name="heroicons:arrow-path" class="animate-spin mr-2" />
-                请稍候，正在进行初始化...
-              </div>
-            </div>
-          </template>
-
-          <div v-if="loading" class="flex justify-center items-center py-12">
-            <UIcon name="heroicons:arrow-path" class="animate-spin text-2xl text-primary-500 mr-2" />
-            <span class="text-gray-400">加载中...</span>
-          </div>
-
-          <div v-else-if="filteredEntryItems.length === 0" class="py-12">
-            <div class="text-center">
-              <UIcon name="heroicons:folder" />
-              <p class="text-gray-400 text-lg">
-                该目录下没有视频文件
-              </p>
+              <UButton
+                :disabled="loading"
+                variant="outline"
+                icon="heroicons:home"
+                @click="goHome"
+              >
+                返回首页
+              </UButton>
+              <UButton
+                :disabled="loading"
+                variant="outline"
+                icon="heroicons:arrow-left"
+                @click="goBack"
+              >
+                返回上级
+              </UButton>
+              <UButton
+                :disabled="loading || detectingScenesLoading"
+                :loading="detectingScenesLoading"
+                variant="outline"
+                color="primary"
+                icon="heroicons:document-magnifying-glass"
+                @click="detectScenes"
+              >
+                {{ detectingScenesLoading ? '分析中...' : '识别分镜' }}
+              </UButton>
             </div>
           </div>
+        </div>
 
-          <!-- <div v-else class="space-y-2">
-            <div
-              v-for="item in filteredEntryItems"
-              :key="item.name"
-              class="flex items-center justify-between p-4 min-h-20 rounded-lg hover:bg-gray-800 transition-colors border border-gray-700"
-              :class="{ 'cursor-pointer': item.kind === 'directory' }"
-              @click="item.kind === 'directory' ? enterSubDirectory(item) : null"
-            >
-              <div class="flex items-center min-w-0 flex-1 gap-3">
-                <UIcon v-if="item.kind === 'directory'" name="heroicons:folder" size="24" />
-                <UIcon v-if="item.kind === 'file'" name="heroicons:film" size="24" />
-                <div class="flex flex-col min-w-0 flex-1">
-                  <div class="flex items-center gap-2">
-                    <UBadge :color="item.kind === 'directory' ? 'primary' : 'neutral'" variant="subtle" size="xs">
-                      {{ item.kind === 'directory' ? '目录' : '文件' }}
-                    </UBadge>
-                    <p class="font-mono text-sm truncate text-gray-200">
-                      {{ item.name }}
-                    </p>
-                  </div>
-                  <div v-if="item.kind === 'file'" class="flex items-center space-x-4 text-xs text-gray-400 mt-1">
-                    <span v-if="item.size !== undefined">
-                      {{ formatFileSize(item.size) }}
-                    </span>
-                    <span v-if="item.lastModified">
-                      {{ item.lastModified.toLocaleDateString() }}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <div class="flex items-center space-x-2 flex-shrink-0">
-                <UButton
-                  v-if="item.kind === 'file'"
-                  size="xs"
-                  variant="ghost"
-                  icon="heroicons:eye"
-                  @click.stop="previewFileContent(item)"
-                >
-                  预览
-                </UButton>
-
-                <UButton
-                  v-if="item.kind === 'file'"
-                  size="xs"
-                  variant="ghost"
-                  color="success"
-                  icon="heroicons:arrow-down-tray"
-                  @click.stop="downloadFileWrapper(item)"
-                >
-                  下载
-                </UButton>
+        <!-- 分镜识别进度条 -->
+        <div v-if="detectingScenesLoading" class="mb-6">
+          <div class="flex justify-between items-center mb-2">
+            <div class="text-sm text-gray-400">
+              <span v-if="detectionProgress.isInitializing">
+                正在初始化图像特征提取器...
+              </span>
+              <span v-else>
+                正在分析: {{ detectionProgress.currentVideoName || '准备中...' }}
+                <span v-if="detectionProgress.totalVideos > 0">
+                  ({{ detectionProgress.currentVideoIndex + 1 }}/{{ detectionProgress.totalVideos }})
+                </span>
+              </span>
+            </div>
+            <div class="text-sm text-gray-400">
+              {{ detectionProgressPercentage }}%
+            </div>
+          </div>
+          <UProgress
+            v-model="detectionProgressPercentage"
+            :max="100"
+            color="primary"
+            size="sm"
+            class="w-full"
+          />
+          <div v-if="!detectionProgress.isInitializing" class="grid grid-cols-2 gap-4 text-xs text-gray-500 mt-2">
+            <div class="space-y-1">
+              <div>已处理帧数: {{ detectionProgress.processedFrames.toLocaleString() }}</div>
+              <div>总处理帧数: {{ detectionProgress.totalProcessedFrames.toLocaleString() }}</div>
+              <div v-if="detectionProgress.currentVideoDuration > 0">
+                当前视频进度: {{ Math.round(detectionProgress.currentVideoProgress * 100) }}%
               </div>
             </div>
-          </div> -->
-        </UCard>
+            <div class="space-y-1">
+              <div>处理耗时: {{ formattedElapsedTime }}</div>
+              <div>平均 FPS: {{ formattedAverageFPS }}</div>
+            </div>
+          </div>
+          <div v-else class="text-xs text-gray-500 mt-2 text-center">
+            <UIcon name="heroicons:arrow-path" class="animate-spin mr-2" />
+            请稍候，正在进行初始化...
+          </div>
+        </div>
 
         <!-- 搜索结果展示 -->
         <UCard v-if="hasSearchResults" class="mt-6">
@@ -1155,11 +1256,11 @@ function handleSearchClear() {
                 <!-- 分镜信息 -->
                 <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent text-white text-xs p-2">
                   <div class="flex justify-between items-end">
-                    <div>
+                    <div class="flex-1 min-w-0">
                       <div class="font-medium">
                         {{ result.scene.formattedTime }}
                       </div>
-                      <div class="text-gray-300 truncate max-w-[80px]" :title="result.videoName">
+                      <div class="text-gray-300 truncate" :title="result.videoName">
                         {{ result.videoName }}
                       </div>
                     </div>
@@ -1167,7 +1268,7 @@ function handleSearchClear() {
                       <div class="font-medium text-primary-300">
                         {{ Math.round(result.similarity * 100) }}%
                       </div>
-                      <div class="text-gray-400 text-[10px]">
+                      <div class="text-gray-400">
                         相似度
                       </div>
                     </div>
@@ -1179,14 +1280,6 @@ function handleSearchClear() {
                   <div class="text-white text-center px-2">
                     <div class="text-sm font-medium mb-1">
                       点击预览分镜
-                    </div>
-                    <div class="text-xs space-y-1">
-                      <div>相似度: {{ Math.round(result.similarity * 100) }}%</div>
-                      <div>视频: {{ result.videoName }}</div>
-                      <div>时间: {{ result.scene.formattedTime }}</div>
-                      <div v-if="result.scene.formattedDuration">
-                        时长: {{ result.scene.formattedDuration }}
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -1218,99 +1311,75 @@ function handleSearchClear() {
               <h3 class="text-lg font-semibold text-gray-200">
                 分镜
               </h3>
+              <div class="text-sm text-gray-400">
+                共 {{ allScenes.length }} 个分镜
+              </div>
             </div>
           </template>
 
-          <div class="space-y-6">
+          <div v-if="allScenes.length > 0" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
             <div
-              v-for="(result, videoName) in currentDirectorySceneResults"
-              :key="videoName"
-              class="border border-gray-700 rounded-lg p-4"
+              v-for="(sceneItem, index) in allScenes"
+              :key="`${sceneItem.videoName}-${sceneItem.sceneIndex}`"
+              class="group relative border border-gray-600 rounded-lg overflow-hidden hover:border-primary-500 transition-colors cursor-pointer"
+              @click="previewScene(sceneItem.scene, sceneItem.videoName, sceneItem.result)"
             >
-              <div class="flex items-center justify-between mb-4">
-                <div class="flex items-center gap-3">
-                  <UIcon name="heroicons:film" size="20" />
-                  <h4 class="font-medium text-gray-200">
-                    {{ videoName }}
-                  </h4>
-                  <UBadge color="primary" variant="subtle" size="xs">
-                    {{ result.totalScenes }} 个分镜
-                  </UBadge>
-                </div>
-                <div class="text-xs text-gray-400">
-                  {{ new Date(result.timestamp).toLocaleString() }}
-                </div>
-              </div>
-
-              <div v-if="result.sceneChanges.length > 0" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-                <div
-                  v-for="(scene, index) in result.sceneChanges"
-                  :key="index"
-                  class="group relative border border-gray-600 rounded-lg overflow-hidden hover:border-primary-500 transition-colors cursor-pointer"
-                  @click="previewScene(scene, videoName as string, result)"
+              <div class="aspect-video bg-gray-800 flex items-center justify-center">
+                <img
+                  v-if="sceneItem.scene.frameImageUrl"
+                  :src="sceneItem.scene.frameImageUrl"
+                  :alt="`分镜 ${index + 1} - ${sceneItem.scene.formattedTime}`"
+                  class="w-full h-full object-cover"
+                  loading="lazy"
                 >
-                  <div class="aspect-video bg-gray-800 flex items-center justify-center">
-                    <img
-                      v-if="scene.frameImageUrl"
-                      :src="scene.frameImageUrl"
-                      :alt="`分镜 ${index + 1} - ${scene.formattedTime}`"
-                      class="w-full h-full object-cover"
-                      loading="lazy"
-                    >
-                    <div v-else class="text-gray-500 text-sm">
-                      <UIcon name="heroicons:photo" size="24" />
+                <div v-else class="text-gray-500 text-sm">
+                  <UIcon name="heroicons:photo" size="24" />
+                </div>
+              </div>
+
+              <!-- 分镜信息 -->
+              <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent text-white text-xs p-2">
+                <div class="flex justify-between items-end gap-2">
+                  <div class="flex-1 min-w-0">
+                    <div class="font-medium">
+                      {{ sceneItem.scene.formattedTime }}
+                    </div>
+                    <div class="text-gray-300 truncate" :title="sceneItem.videoName">
+                      {{ sceneItem.videoName }}
                     </div>
                   </div>
-
-                  <!-- 分镜信息 -->
-                  <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent text-white text-xs p-2">
-                    <div class="flex justify-between items-end">
-                      <div>
-                        <div class="font-medium">
-                          {{ scene.formattedTime }}
-                        </div>
-                        <div class="text-gray-300">
-                          分镜 {{ index + 1 }}
-                        </div>
-                      </div>
-                      <div v-if="scene.formattedDuration" class="text-right">
-                        <div class="font-medium text-primary-300">
-                          {{ scene.formattedDuration }}
-                        </div>
-                        <div class="text-gray-400 text-[10px]">
-                          时长
-                        </div>
-                      </div>
-                      <div v-else class="text-right">
-                        <div class="font-medium text-gray-400 text-[10px]">
-                          未知时长
-                        </div>
-                      </div>
+                  <div v-if="sceneItem.scene.formattedDuration" class="text-right">
+                    <div class="font-medium text-primary-300">
+                      {{ sceneItem.scene.formattedDuration }}
+                    </div>
+                    <div class="text-gray-400">
+                      时长
                     </div>
                   </div>
-
-                  <!-- 悬停时显示更多信息 -->
-                  <div class="absolute inset-0 bg-black/80 transition-opacity flex items-center justify-center opacity-0 group-hover:opacity-100">
-                    <div class="text-white text-center">
-                      <div class="text-sm font-medium mb-1">
-                        点击预览分镜
-                      </div>
-                      <div class="text-xs space-y-1">
-                        <div>差异度: {{ Math.round(scene.score * 100) }}%</div>
-                        <div>帧索引: {{ scene.frameIndex }}</div>
-                      </div>
+                  <div v-else class="text-right">
+                    <div class="font-medium text-gray-400">
+                      未知时长
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div v-else class="text-center py-8 text-gray-400">
-                <UIcon name="heroicons:exclamation-circle" size="24" />
-                <p class="mt-2">
-                  未检测到分镜切换
-                </p>
+              <!-- 悬停时显示更多信息 -->
+              <div class="absolute inset-0 bg-black/80 transition-opacity flex items-center justify-center opacity-0 group-hover:opacity-100">
+                <div class="text-white text-center px-2">
+                  <div class="text-sm font-medium mb-1">
+                    点击预览分镜
+                  </div>
+                </div>
               </div>
             </div>
+          </div>
+
+          <div v-else class="text-center py-8 text-gray-400">
+            <UIcon name="heroicons:exclamation-circle" size="24" />
+            <p class="mt-2">
+              未检测到分镜切换
+            </p>
           </div>
         </UCard>
       </div>

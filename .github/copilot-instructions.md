@@ -10,10 +10,11 @@
 - **存储**: localStorage + File System Access API
 - **类型系统**: TypeScript
 
-## 其他
+## 注意事项
 
-- 本项目使用了 Nuxt，会 auto import utils、components、composables、types 等目录的内容，不需要手动 import
+- 本项目使用了 Nuxt，会自动 import utils、components、composables、types 等目录的方法和组件等，无需手动 import
 - 类型定义统一放到 `shared/types.ts` 中
 - 不要生成测试或示例代码，直接在当前项目代码中新增或修改
 - 不要执行 `pnpm dev` 命令，我会帮你运行并测试
 - 不要输出总结，不要自动生成说明文档
+- 代码尽可能简洁明了、高性能，不要写冗余代码，在必要时请提取公共方法

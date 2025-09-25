@@ -292,8 +292,8 @@ export async function saveThumbnailToLocalDirectory(
     throw error
   }
 
-  // 生成缩略图文件名：视频名_帧索引_时间戳.jpg
-  const videoNameWithoutExt = videoName.replace(/\.[^/.]+$/, '')
+  // 生成缩略图文件名：将路径中的分隔符替换为下划线，避免文件系统问题
+  const videoNameWithoutExt = videoName.replace(/\.[^/.]+$/, '').replace(/[/\\]/g, '_')
   const timestampStr = Math.floor(timestamp).toString().padStart(6, '0')
   const thumbnailFileName = `${videoNameWithoutExt}_frame_${frameIndex}_${timestampStr}.jpg`
 
