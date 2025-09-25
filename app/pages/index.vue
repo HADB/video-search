@@ -20,7 +20,6 @@ const detectionProgress = ref({
   currentVideoName: '',
   currentVideoDuration: 0,
   currentVideoProgress: 0,
-  processedFrames: 0,
   // 初始化相关字段
   isInitializing: false,
   initializationMessage: '',
@@ -489,7 +488,6 @@ async function detectScenes() {
     currentVideoName: '',
     currentVideoDuration: 0,
     currentVideoProgress: 0,
-    processedFrames: 0,
     isInitializing: false,
     initializationMessage: '',
     initializationStartTime: 0,
@@ -533,7 +531,6 @@ async function detectScenes() {
       detectionProgress.value.currentVideoName = videoFile.relativePath
       detectionProgress.value.currentVideoDuration = 0
       detectionProgress.value.currentVideoProgress = 0
-      detectionProgress.value.processedFrames = 0
 
       // 用于统计的帧计数器
       let framesSinceLastUpdate = 0
@@ -627,7 +624,6 @@ async function detectScenes() {
           }
 
           // 更新帧处理进度
-          detectionProgress.value.processedFrames = totalFrames
 
           // 基于当前时间戳和视频总时长计算当前视频进度
           if (detectionProgress.value.currentVideoDuration > 0) {
@@ -703,7 +699,6 @@ async function detectScenes() {
       currentVideoName: '',
       currentVideoDuration: 0,
       currentVideoProgress: 0,
-      processedFrames: 0,
       isInitializing: false,
       initializationMessage: '',
       initializationStartTime: 0,
@@ -1126,7 +1121,6 @@ function handleSearchClear() {
           />
           <div class="grid grid-cols-2 gap-4 text-xs text-gray-500 mt-2">
             <div class="space-y-1">
-              <div>已处理帧数: {{ detectionProgress.processedFrames.toLocaleString() }}</div>
               <div>总处理帧数: {{ detectionProgress.totalProcessedFrames.toLocaleString() }}</div>
               <div>当前视频进度: {{ Math.round(detectionProgress.currentVideoProgress * 100) }}%</div>
             </div>
