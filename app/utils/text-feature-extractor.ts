@@ -1,15 +1,15 @@
-import { AutoTokenizer, CLIPTextModelWithProjection } from '@huggingface/transformers'
+import { AutoModel, AutoTokenizer } from '@huggingface/transformers'
 
 /**
- * CLIP 文本特征提取器
- * 使用 Hugging Face Transformers 的 CLIPTextModelWithProjection 提取文本特征向量
+ * Chinese CLIP 文本特征提取器
+ * 使用 Hugging Face Transformers 的 AutoModel 提取文本特征向量
  *
- * 现在使用真正的 CLIP 文本编码器，与图像特征在同一特征空间中
- * 可以进行有效的跨模态相似度计算
+ * 使用 Chinese CLIP 模型，支持中文文本编码
+ * 与图像特征在同一特征空间中，可以进行有效的跨模态相似度计算
  */
 export class CLIPTextExtractor {
   private tokenizer: any = null
-  private textModel: any = null
+  private model: any = null
   private isInitialized = false
   private initPromise: Promise<void> | null = null
 
@@ -27,17 +27,17 @@ export class CLIPTextExtractor {
 
     this.initPromise = (async () => {
       try {
-        console.log('正在初始化 CLIP 文本特征提取器...')
+        console.log('正在初始化 Chinese CLIP 文本特征提取器...')
 
-        // 加载 tokenizer 和 CLIP 文本模型
-        this.tokenizer = await AutoTokenizer.from_pretrained('Xenova/clip-vit-base-patch32')
-        this.textModel = await CLIPTextModelWithProjection.from_pretrained('Xenova/clip-vit-base-patch32', { device: 'webgpu', dtype: 'fp32' })
+        // 加载 tokenizer 和 Chinese CLIP 模型
+        this.tokenizer = await AutoTokenizer.from_pretrained('Xenova/chinese-clip-vit-base-patch16')
+        this.model = await AutoModel.from_pretrained('Xenova/chinese-clip-vit-base-patch16', { device: 'webgpu', dtype: 'fp32' })
 
         this.isInitialized = true
-        console.log('CLIP 文本特征提取器初始化完成')
+        console.log('Chinese CLIP 文本特征提取器初始化完成')
       }
       catch (error) {
-        console.error('CLIP 文本特征提取器初始化失败:', error)
+        console.error('Chinese CLIP 文本特征提取器初始化失败:', error)
         this.initPromise = null
         throw error
       }
@@ -54,21 +54,70 @@ export class CLIPTextExtractor {
   async extractFeatureFromText(text: string): Promise<Float32Array> {
     await this.initialize()
 
-    if (!this.tokenizer || !this.textModel) {
+    if (!this.tokenizer || !this.model) {
       throw new Error('文本特征提取器未初始化')
     }
 
     try {
       console.log('开始提取文本特征向量:', text.slice(0, 50))
 
-      // 使用 tokenizer 对文本进行编码
-      const textInputs = this.tokenizer([text], { padding: true, truncation: true })
+      // 使用 tokenizer 对文本进行编码，指定序列长度为52（与Chinese CLIP模型保持一致）
+      const textInputs = this.tokenizer([text], {
+        padding: true,
+        truncation: true,
+        max_length: 52, // Chinese CLIP 模型的标准序列长度
+      })
 
-      // 使用 CLIP 文本模型计算嵌入
-      const { text_embeds } = await this.textModel(textInputs)
+      // Chinese CLIP 模型需要同时提供文本和图像输入
+      // 创建一个虚拟的图像输入作为占位符
+      const { Tensor } = await import('@huggingface/transformers')
+      const dummyImageData = new Float32Array(1 * 3 * 224 * 224).fill(0) // [batch, channels, height, width]
+      const pixelValues = new Tensor(
+        'float32',
+        dummyImageData,
+        [1, 3, 224, 224], // [batch_size, channels, height, width]
+      )
+
+      const inputs = {
+        ...textInputs,
+        pixel_values: pixelValues,
+      }
+
+      console.log('Chinese CLIP 模型输入（包含虚拟图像张量）:', inputs)
+      const outputs = await this.model(inputs)
+      console.log('Chinese CLIP Model outputs:', outputs)
+
+      // 尝试不同的输出字段来获取文本特征
+      let textEmbeds = null
+      if (outputs.unnorm_text_features) {
+        console.log('找到 unnorm_text_features 输出（Chinese CLIP 标准输出）')
+        textEmbeds = outputs.unnorm_text_features
+      }
+      else if (outputs.text_embeds) {
+        console.log('找到 text_embeds 输出')
+        textEmbeds = outputs.text_embeds
+      }
+      else if (outputs.last_hidden_state) {
+        console.log('使用 last_hidden_state，提取 CLS token 表示')
+        // 如果没有 text_embeds，从 last_hidden_state 中提取 CLS token
+        const lastHiddenState = outputs.last_hidden_state
+        // 假设 batch_size=1，取第一个序列的第一个 token ([CLS])
+        const hiddenSize = lastHiddenState.dims[2] // 隐藏层维度
+        textEmbeds = {
+          data: lastHiddenState.data.slice(0, hiddenSize),
+        }
+      }
+      else if (outputs.pooler_output) {
+        console.log('使用 pooler_output')
+        textEmbeds = outputs.pooler_output
+      }
+      else {
+        console.error('可用的输出字段:', Object.keys(outputs))
+        throw new Error('无法从模型输出中提取文本特征，请检查模型输出格式')
+      }
 
       // 转换为 Float32Array
-      const featureArray = new Float32Array(text_embeds.data as ArrayLike<number>)
+      const featureArray = new Float32Array(textEmbeds.data as ArrayLike<number>)
 
       // 检查原始特征向量的模长
       const magnitude = Math.sqrt(featureArray.reduce((sum, val) => sum + val * val, 0))
@@ -225,10 +274,10 @@ export class CLIPTextExtractor {
    */
   dispose(): void {
     this.tokenizer = null
-    this.textModel = null
+    this.model = null
     this.isInitialized = false
     this.initPromise = null
-    console.log('CLIP 文本特征提取器资源已清理')
+    console.log('Chinese CLIP 文本特征提取器资源已清理')
   }
 }
 
