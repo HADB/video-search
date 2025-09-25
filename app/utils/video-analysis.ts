@@ -1,6 +1,3 @@
-import type { AnalysisOptions, SceneChangePoint } from '../../shared/types'
-import { FeatureSerializationUtils } from './feature-serialization'
-
 /**
  * 保存分镜特征向量到本地文件系统
  * @param sceneChanges 分镜切换点数组
@@ -424,7 +421,6 @@ export function createVideoFrameSceneDetector(
   const initFeatureExtractor = async () => {
     if (options.enableFeatureExtraction && !isFeatureExtractorInitialized) {
       try {
-        const { getGlobalImageExtractor } = await import('./image-feature-extractor')
         imageFeatureExtractor = getGlobalImageExtractor()
         isFeatureExtractorInitialized = true
         console.log('图像特征提取器实例已创建，等待模型加载...')

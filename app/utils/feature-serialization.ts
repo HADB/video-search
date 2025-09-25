@@ -1,5 +1,3 @@
-import type { SceneChangePoint, StoredSceneAnalysisResult, StoredSceneChangePoint, VideoAnalysisResult } from '../../shared/types'
-
 /**
  * 特征向量序列化工具函数
  */

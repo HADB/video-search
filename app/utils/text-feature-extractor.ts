@@ -255,6 +255,13 @@ export class CLIPTextExtractor {
   }
 
   /**
+   * 公共的初始化方法，可以被外部调用来预加载模型
+   */
+  async preload(): Promise<void> {
+    return this.initialize()
+  }
+
+  /**
    * 检查提取器是否已初始化
    */
   get initialized(): boolean {

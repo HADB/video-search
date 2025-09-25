@@ -836,9 +836,6 @@ async function searchScenes(query: string) {
   hasSearched.value = true
   isModelLoading.value = true
   try {
-    // 动态导入文本搜索服务
-    const { TextSearchService } = await import('~/utils/text-search-service')
-
     // 收集所有分镜数据进行搜索
     const allScenesMap = new Map<string, SceneChangePoint[]>()
 
@@ -952,6 +949,53 @@ function handleSearchClear() {
     searchTimeoutId = null
   }
 }
+
+// 预加载模型
+async function preloadModels() {
+  try {
+    console.log('开始预加载 CLIP 模型...')
+    detectionProgress.value.isInitializing = true
+    detectionProgress.value.initializationMessage = '正在预加载 CLIP 模型...'
+    console.log('设置 isInitializing =', detectionProgress.value.isInitializing)
+
+    // 检查是否已经初始化
+    const imageExtractor = getGlobalImageExtractor()
+    const textExtractor = getGlobalTextExtractor()
+
+    if (imageExtractor.initialized && textExtractor.initialized) {
+      console.log('CLIP 模型已经初始化，跳过预加载')
+      detectionProgress.value.isInitializing = false
+      detectionProgress.value.initializationMessage = ''
+      return
+    }
+
+    // 并行预加载两个模型
+    await Promise.all([
+      !imageExtractor.initialized ? imageExtractor.preload().catch(error => {
+        console.warn('图像特征提取器预加载失败:', error)
+        return null
+      }) : Promise.resolve(),
+      !textExtractor.initialized ? textExtractor.preload().catch(error => {
+        console.warn('文本特征提取器预加载失败:', error)
+        return null
+      }) : Promise.resolve()
+    ])
+
+    console.log('CLIP 模型预加载完成')
+  } catch (error) {
+    console.error('模型预加载失败:', error)
+  } finally {
+    // 确保状态被重置
+    detectionProgress.value.isInitializing = false
+    detectionProgress.value.initializationMessage = ''
+    console.log('重置 isInitializing =', detectionProgress.value.isInitializing)
+  }
+}
+
+// 页面加载时预加载模型
+onMounted(() => {
+  preloadModels()
+})
 </script>
 
 <template>
@@ -968,7 +1012,7 @@ function handleSearchClear() {
     />
     <template v-else>
       <div v-if="isHome">
-        <UCard v-if="storedDirectories.length > 0">
+        <UCard v-if="storedDirectories.length > 0 && !detectionProgress.isInitializing">
           <template #header>
             <div class="flex justify-between items-center">
               <h2 class="text-lg font-semibold">
@@ -1023,7 +1067,7 @@ function handleSearchClear() {
         </UCard>
 
         <!-- 空状态 -->
-        <UCard v-else>
+        <UCard v-else-if="!detectionProgress.isInitializing">
           <div class="py-12 text-center">
             <UIcon name="heroicons:folder" />
             <h3 class="text-lg font-semibold text-gray-300 mb-2">
@@ -1040,6 +1084,24 @@ function handleSearchClear() {
               添加第一个目录
             </UButton>
           </div>
+        </UCard>
+      </div>
+
+      <!-- 模型预加载进度条 -->
+      <div v-if="detectionProgress.isInitializing" class="mb-6">
+        <UCard>
+          <div class="flex justify-between items-center mb-2">
+            <div class="text-sm text-gray-400">
+              {{ detectionProgress.initializationMessage || '正在预加载 CLIP 模型...' }}
+            </div>
+          </div>
+          <UProgress
+            :value="50"
+            :max="100"
+            color="primary"
+            size="sm"
+            animation="carousel"
+          />
         </UCard>
       </div>
 
@@ -1236,7 +1298,6 @@ function handleSearchClear() {
             </div>
           </div>
         </UCard>
-
 
         <!-- 分镜分析结果展示 -->
         <UCard v-if="hasSceneAnalysisResults && !showSearchResultsCard" class="mt-6">
