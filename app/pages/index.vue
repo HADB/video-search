@@ -46,6 +46,7 @@ const searchResults = ref<Array<{
 }>>([])
 const isSearching = ref(false)
 const hasSearched = ref(false)
+const isModelLoading = ref(false)
 
 const currentPath = computed(() => currentPathDirectories.map((dir) => dir.name).join('/'))
 const currentDirectoryKey = computed(() => {
@@ -56,8 +57,8 @@ const currentDirectoryKey = computed(() => {
 })
 const isHome = computed(() => currentPathDirectories.length === 0)
 
-// 是否显示搜索结果
-const hasSearchResults = computed(() => searchResults.value.length > 0)
+// 是否显示搜索结果框（搜索开始后就显示）
+const showSearchResultsCard = computed(() => hasSearched.value)
 
 // 计算分镜识别的总体进度百分比
 const detectionProgressPercentage = computed(() => {
@@ -838,6 +839,7 @@ async function searchScenes(query: string) {
 
   isSearching.value = true
   hasSearched.value = true
+  isModelLoading.value = true
   try {
     // 动态导入文本搜索服务
     const { TextSearchService } = await import('~/utils/text-search-service')
@@ -867,6 +869,9 @@ async function searchScenes(query: string) {
 
     // 创建搜索服务实例
     const searchService = new TextSearchService()
+
+    // 模型加载完成
+    isModelLoading.value = false
 
     // 执行搜索
     const results = await searchService.searchByText({
@@ -913,6 +918,7 @@ async function searchScenes(query: string) {
   }
   finally {
     isSearching.value = false
+    isModelLoading.value = false
   }
 }
 
@@ -945,6 +951,7 @@ function handleSearchChange(event: Event) {
 function handleSearchClear() {
   searchResults.value = []
   hasSearched.value = false
+  isModelLoading.value = false
   if (searchTimeoutId) {
     clearTimeout(searchTimeoutId)
     searchTimeoutId = null
@@ -1131,7 +1138,7 @@ function handleSearchClear() {
         </div>
 
         <!-- 搜索结果展示 -->
-        <UCard v-if="hasSearchResults" class="mt-6">
+        <UCard v-if="showSearchResultsCard" class="mt-6">
           <template #header>
             <div class="flex justify-between items-center">
               <h3 class="text-lg font-semibold text-gray-200">
@@ -1144,8 +1151,44 @@ function handleSearchClear() {
           </template>
 
           <div class="space-y-4">
+            <!-- 模型加载中状态 -->
+            <div v-if="isModelLoading" class="py-12 text-center">
+              <UIcon name="heroicons:arrow-path" size="32" class="text-primary-500 mb-4 animate-spin" />
+              <h3 class="text-lg font-semibold text-gray-300 mb-2">
+                正在加载搜索模型...
+              </h3>
+              <p class="text-gray-400">
+                首次使用需要下载模型，请稍候...
+              </p>
+            </div>
+
+            <!-- 搜索中状态 -->
+            <div v-else-if="isSearching" class="py-12 text-center">
+              <UIcon name="heroicons:magnifying-glass" size="32" class="text-primary-500 mb-4 animate-pulse" />
+              <h3 class="text-lg font-semibold text-gray-300 mb-2">
+                正在搜索分镜...
+              </h3>
+              <p class="text-gray-400">
+                正在分析"{{ searchQuery }}"相关内容
+              </p>
+            </div>
+
+            <!-- 无搜索结果状态 -->
+            <div v-else-if="searchResults.length === 0" class="py-12 text-center">
+              <UIcon name="heroicons:face-frown" size="32" class="text-gray-500 mb-4" />
+              <h3 class="text-lg font-semibold text-gray-300 mb-2">
+                没有找到匹配的分镜
+              </h3>
+              <p class="text-gray-400 mb-4">
+                尝试使用不同的搜索关键词，或确认已进行分镜识别
+              </p>
+              <div class="text-sm text-gray-500">
+                搜索词: "{{ searchQuery }}"
+              </div>
+            </div>
+
             <!-- 搜索结果网格 -->
-            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+            <div v-else class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
               <div
                 v-for="(result, index) in searchResults"
                 :key="`${result.videoName}-${result.sceneIndex}`"
@@ -1200,24 +1243,9 @@ function handleSearchClear() {
           </div>
         </UCard>
 
-        <!-- 空搜索结果提示 - 只有在实际搜索后且无结果时才显示 -->
-        <UCard v-if="searchQuery.trim() && !hasSearchResults && !isSearching && hasSearched" class="mt-6">
-          <div class="py-12 text-center">
-            <UIcon name="heroicons:magnifying-glass" size="32" class="text-gray-500 mb-4" />
-            <h3 class="text-lg font-semibold text-gray-300 mb-2">
-              没有找到匹配的分镜
-            </h3>
-            <p class="text-gray-400 mb-4">
-              尝试使用不同的搜索关键词，或确认已进行分镜识别
-            </p>
-            <div class="text-sm text-gray-500">
-              搜索词: "{{ searchQuery }}"
-            </div>
-          </div>
-        </UCard>
 
         <!-- 分镜分析结果展示 -->
-        <UCard v-if="hasSceneAnalysisResults && !hasSearchResults" class="mt-6">
+        <UCard v-if="hasSceneAnalysisResults && !showSearchResultsCard" class="mt-6">
           <template #header>
             <div class="flex justify-between items-center">
               <h3 class="text-lg font-semibold text-gray-200">
