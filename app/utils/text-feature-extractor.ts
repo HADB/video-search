@@ -60,6 +60,7 @@ export class CLIPTextExtractor {
 
     try {
       console.log('开始提取文本特征向量:', text.slice(0, 50))
+      const startTime = performance.now()
 
       // 使用 tokenizer 对文本进行编码，指定序列长度为52（与Chinese CLIP模型保持一致）
       const textInputs = this.tokenizer([text], {
@@ -133,6 +134,7 @@ export class CLIPTextExtractor {
         console.log('对文本特征进行 L2 归一化')
         finalFeatures = CLIPTextExtractor.normalizeFeatures(featureArray)
       }
+      console.log(`文本特征向量提取完成，耗时: ${performance.now() - startTime} ms`)
       return finalFeatures
     }
     catch (error) {

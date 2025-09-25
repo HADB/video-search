@@ -61,9 +61,7 @@ export class TextSearchService {
       console.log('开始文本搜索:', text)
 
       // 提取查询文本的特征向量
-      const startTime = performance.now()
       const queryFeatures = await this.textExtractor.extractFeatureFromText(text.trim())
-      console.log('文本特征向量提取完成，耗时:', performance.now() - startTime)
 
       const results: TextSearchResult[] = []
 

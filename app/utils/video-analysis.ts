@@ -529,9 +529,6 @@ export function createVideoFrameSceneDetector(
         if (imageFeatureExtractor) {
           try {
             imageFeatures = await imageFeatureExtractor.extractFeatureFromImage(videoFrame)
-            if (imageFeatures) {
-              console.log(`第一帧特征向量提取完成，维度: ${imageFeatures.length}`)
-            }
           }
           catch (error) {
             console.warn('提取第一帧特征向量失败:', error)
@@ -579,12 +576,7 @@ export function createVideoFrameSceneDetector(
           let imageFeatures: Float32Array | undefined
           if (imageFeatureExtractor) {
             try {
-              const startTime = performance.now()
               imageFeatures = await imageFeatureExtractor.extractFeatureFromImage(videoFrame)
-              const endTime = performance.now()
-              if (imageFeatures) {
-                console.log(`分镜 ${frameIndex} 特征向量提取完成，耗时 ${(endTime - startTime).toFixed(2)} ms，维度: ${imageFeatures.length}`)
-              }
             }
             catch (error) {
               console.warn(`提取分镜 ${frameIndex} 特征向量失败:`, error)

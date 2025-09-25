@@ -98,6 +98,7 @@ export class CLIPFeatureExtractor {
 
     try {
       console.log('开始提取图像特征向量...')
+      const startTime = performance.now()
 
       // 将 VideoFrame 转换为像素值张量
       const pixelValues = await this.loadImageTensor(videoFrame)
@@ -152,7 +153,7 @@ export class CLIPFeatureExtractor {
         finalFeatures = CLIPFeatureExtractor.normalizeFeatures(featureArray)
       }
 
-      console.log(`图像特征向量提取完成，维度: ${finalFeatures.length}`)
+      console.log(`图像特征向量提取完成，耗时: ${performance.now() - startTime} ms`)
       return finalFeatures
     }
     catch (error) {
@@ -229,7 +230,6 @@ export class CLIPFeatureExtractor {
         finalFeatures = CLIPFeatureExtractor.normalizeFeatures(featureArray)
       }
 
-      console.log(`文件特征向量提取完成，维度: ${finalFeatures.length}`)
       return finalFeatures
     }
     catch (error) {
